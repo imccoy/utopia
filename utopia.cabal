@@ -15,12 +15,13 @@ cabal-version:       >=1.10
 executable utopia
   main-is:             Main.hs
   -- other-modules:       
-  default-extensions:  OverloadedStrings, RecordWildCards
+  default-extensions:  OverloadedStrings, RecordWildCards, NamedFieldPuns
   build-depends:       base >=4.8 && <4.9,
                        containers,
                        aeson,
                        bimap,
                        bytestring,
+                       http-client,
                        lens,
                        mtl,
                        safe,

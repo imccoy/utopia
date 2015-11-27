@@ -4,6 +4,8 @@ import Debug.Trace
 
 import Prelude hiding (putStrLn)
 
+import Control.Concurrent (threadDelay)
+import qualified Control.Exception as E
 import Control.Lens ((^.))
 import Control.Monad.Reader
 import qualified Control.Monad.State as State
@@ -16,6 +18,8 @@ import qualified Data.ByteString.Lazy as LB
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Monoid
+import Data.Set (Set)
+import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Text.IO
@@ -23,6 +27,7 @@ import Data.Text.Lazy.Builder
 import qualified Data.UUID as UUID
 import qualified Data.UUID.V1
 import qualified Data.UUID.V4
+import Network.HTTP.Client (HttpException (NoResponseDataReceived))
 import Network.Wreq
 import Safe
 
@@ -56,8 +61,14 @@ newtype CodeDbId = CodeDbId Text
   deriving (Ord, Eq, Show)
 codeDbIdText (CodeDbId id) = id
 
-data CodeDbEntry = CodeDbEntry (Maybe Text) Text [CodeDbId]
-data CodeDb = CodeDb { codeDbId :: CodeDbId, codeDbEntries :: (Map CodeDbId CodeDbEntry) }
+newtype CodeDbType = CodeDbType Text
+  deriving (Ord, Eq, Show)
+codeDbTypeText (CodeDbType ty) = ty
+
+data CodeDbTreeEntry = CodeDbTreeEntry CodeDbType [CodeDbId]
+
+data ProjectionCode = ProjectionCode CodeDbId CodeDbType [ProjectionCode]
+data Projection = Projection { projectionCode :: ProjectionCode, projectionNames :: Map CodeDbId Text }
 
 type CodeDbIdGen a = ReaderT Text IO a
 
@@ -65,9 +76,9 @@ newtype SrcMapId = SrcMapId Integer
   deriving (Show,Ord,Eq)
 newtype DstMapId = DstMapId Integer
   deriving (Show,Ord,Eq)
-data SrcMapping = Delete | SrcChange DstMapId | SrcMove DstMapId
+data SrcMapping = Delete | SrcChange CodeDbId | SrcMove CodeDbId
   deriving (Show)
-data DstMapping = Add | DstChange SrcMapId | DstMove SrcMapId
+data DstMapping = Add | DstChange CodeDbId | DstMove CodeDbId
   deriving (Show)
 
 runCodeDbIdGen f = do
@@ -85,36 +96,45 @@ nextCodeDbId :: CodeDbIdGen CodeDbId
 nextCodeDbId = do
   baseUUID <- ask
   tailUUID <- liftIO Data.UUID.V4.nextRandom
-  return $ CodeDbId $ baseUUID `T.append` UUID.toText tailUUID
+  return $ CodeDbId $ baseUUID `T.append` "-" `T.append` UUID.toText tailUUID
 
 main = do
   v1 <- runCodeDbIdGen $ ingest $ toCodeTree Code.v1
-  printdb v1
+  printProjection v1
   v2 <- runCodeDbIdGen $ ingest $ toCodeTree Code.v2
-  printdb v2
-  diff <- diffCodeDbs v1 v2
-  putStrLn $ T.pack $ show diff
-  -- printDiff diff
-  return ()
+  printProjection v2
+  diffResult <- diffProjections v1 v2
+  case diffResult of
+    (Left e) -> putStrLn . T.pack $ "Couldn't parse diff: " ++ e
+    (Right (srcDiff, dstDiff)) -> do
+      putStrLn $ T.pack $ unlines $ map show $ Map.assocs srcDiff
+      putStrLn $ T.pack $ unlines $ map show $ Map.assocs dstDiff
 
-diffCodeDbs src dst = do
-  let codeDbIds = codeDbIntKeys [src, dst]
+diffProjections src dst = do
+  let projectionIds = projectionIntKeys [src, dst]
   let q = encode $ object [
-             "src" .= codeDbJson codeDbIds src,
-             "dst" .= codeDbJson codeDbIds dst
+             "src" .= projectionJson projectionIds src,
+             "dst" .= projectionJson projectionIds dst
           ]
-  response <- post "http://localhost:4754/" q
+  response <- ntries 5 $ post "http://localhost:4754/" q
   let mappingsJson = eitherDecode (response ^. responseBody) :: Either String Array
-  let mappings = parseMappings =<< mappingsJson
-  putStrLn $ T.pack $ show mappings
+  let mappings = parseMappings projectionIds =<< mappingsJson
+  return mappings
 
-parseMappings :: Array -> Either String (Map SrcMapId SrcMapping, Map DstMapId DstMapping)
-parseMappings = foldM parseMapping (Map.empty, Map.empty)
+ntries n action = action `E.catch` (handler n)
+  where handler 0 e = E.throwIO e
+        handler n NoResponseDataReceived = do putStrLn "NoResponseDataReceived, normally just a gumtree hissyfit, retrying"
+                                              threadDelay 2000000 -- 2s in microseconds
+                                              ntries (n - 1) action
+        handler _ e = E.throwIO e
+
+parseMappings :: Bimap CodeDbId Integer -> Array -> Either String (Map CodeDbId SrcMapping, Map CodeDbId DstMapping)
+parseMappings projectionIdInts  = foldM parseMapping (Map.empty, Map.empty)
   where parseMapping (srcMappings, dstMappings) mapping = do
           flip parseEither mapping $ withObject "mapping was not an object" $ \obj -> do
             ty <- obj .: "ty"
-            let getSrc = obj .: "src" >>= return . SrcMapId
-            let getDst = obj .: "dst" >>= return . DstMapId
+            let getSrc = obj .: "src" >>= (`Bimap.lookupR` projectionIdInts)
+            let getDst = obj .: "dst" >>= (`Bimap.lookupR` projectionIdInts)
             case (ty :: Text) of
               "change" -> do
                 src <- getSrc
@@ -137,36 +157,39 @@ parseMappings = foldM parseMapping (Map.empty, Map.empty)
   
   
 
-codeDbIntKeys :: [CodeDb] -> Bimap CodeDbId Integer
-codeDbIntKeys codeDbs = let allKeys = Map.keys (Map.unions $ map codeDbEntries codeDbs)
-                            assocs = zip allKeys [0..] 
-                         in Bimap.fromList assocs
+projectionIntKeys :: [Projection] -> Bimap CodeDbId Integer
+projectionIntKeys projections = let allKeys = Set.unions $ map (projectionCodeDbIds . projectionCode) projections
+                                    assocs = zip (Set.toList allKeys) [0..] 
+                                 in Bimap.fromList assocs
 
-codeDbJson codeDbIdInts codeDb@(CodeDb{..}) = codeDbJson' codeDbId
+projectionCodeDbIds :: ProjectionCode -> Set CodeDbId
+projectionCodeDbIds (ProjectionCode id _ children) = id `Set.insert` (Set.unions $ map projectionCodeDbIds children)
+
+projectionJson projectionIdInts Projection{..} = projectionJson' projectionCode
   where
-    codeDbJson' codeDbId = object [
-                             "id" .= fromJustNote ("codeDbJson' " ++ show codeDbId) (Bimap.lookup codeDbId codeDbIdInts),
-                             "label" .= fromJustDef "" name,
-                             "typeLabel" .= ty,
-                             "children" .= map codeDbJson' children
-                           ]
-      where (CodeDbEntry name ty children) = dbEntry' codeDbId codeDbEntries
+    projectionJson' (ProjectionCode id ty children) = object [
+                                                        "id" .= fromJustNote ("projectionJson' " ++ show id) (Bimap.lookup id projectionIdInts),
+                                                        "label" .= fromJustDef "" (Map.lookup id projectionNames),
+                                                        "typeLabel" .= codeDbTypeText ty,
+                                                        "children" .= map projectionJson' children
+                                                      ]
 
-ingest :: CodeTree -> CodeDbIdGen CodeDb
+ingest :: CodeTree -> CodeDbIdGen Projection
 ingest (CodeTree name ty children) = do
   id <- nextCodeDbId
-  childDbs <- mapM ingest children
-  let childIds = map codeDbId childDbs
-  let childMaps = map codeDbEntries childDbs
-  let childMap = Map.unions childMaps
-  return $ CodeDb id (Map.insert id (CodeDbEntry name ty childIds) childMap)
+  childProjections <- mapM ingest children
+  let childrenProjectionCode = map projectionCode childProjections
+  let projectionCode = ProjectionCode id (CodeDbType ty) childrenProjectionCode
 
-printdb :: CodeDb -> IO ()
-printdb = printdb' "" where
-  printdb' prefix codeDb@(CodeDb {..}) = do
-    let (CodeDbEntry name ty children) = dbEntry codeDb
-    putStrLn $ prefix `T.append` ty `T.append` " " `T.append` fromJustDef "" name
-    forM_ children (\childId -> printdb' (prefix `T.append` "  ") (CodeDb childId codeDbEntries))
+  let childNameMaps = map projectionNames childProjections
+  let childNamesMap = Map.unions childNameMaps
+  let projectionNames = maybe childNamesMap (\name -> Map.insert id name childNamesMap) name
+  return $ Projection { projectionCode, projectionNames }
 
-dbEntry (CodeDb {..}) = dbEntry' codeDbId codeDbEntries
-dbEntry' codeDbId codeDbEntries = fromJustDef (CodeDbEntry (Just $ codeDbIdText codeDbId) "MISSING" []) $ Map.lookup codeDbId codeDbEntries
+printProjection :: Projection -> IO ()
+printProjection Projection{..} = printProjection' " " projectionCode where
+  printProjection' prefix (ProjectionCode id ty children) = do
+    let name = Map.lookup id projectionNames
+    putStrLn $ codeDbIdText id `T.append` prefix `T.append` codeDbTypeText ty `T.append` " " `T.append` fromJustDef "" name
+    forM_ children (printProjection' (prefix `T.append` "  "))
+
