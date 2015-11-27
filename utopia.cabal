@@ -1,0 +1,31 @@
+name:                utopia
+version:             0.1.0.0
+-- synopsis:            
+-- description:         
+license:             MIT
+license-file:        LICENSE
+author:              Iain McCoy
+maintainer:          iain@mccoy.id.au
+-- copyright:           
+category:            Development
+build-type:          Simple
+-- extra-source-files:  
+cabal-version:       >=1.10
+
+executable utopia
+  main-is:             Main.hs
+  -- other-modules:       
+  default-extensions:  OverloadedStrings, RecordWildCards
+  build-depends:       base >=4.8 && <4.9,
+                       containers,
+                       aeson,
+                       bimap,
+                       bytestring,
+                       lens,
+                       mtl,
+                       safe,
+                       text,
+                       uuid,
+                       wreq
+  hs-source-dirs:      src
+  default-language:    Haskell2010
