@@ -29,7 +29,7 @@ import Safe
 import qualified Lam
 import qualified Code
 import qualified Diff
-import DiffTree (diffTree)
+import qualified DiffTree
 
 data CodeTree = CodeTree (Maybe Text) Text [CodeTree]
 
@@ -97,8 +97,8 @@ nextCodeDbId = do
   return $ CodeDbId $ baseUUID `T.append` "-" `T.append` UUID.toText tailUUID
 
 main = do
-  let v1 = diffTree Code.v1
-  let v2 = diffTree Code.v2
+  let v1 = Lam.diffTree Code.v1
+  let v2 = Lam.diffTree Code.v2
   let diffResult = Diff.diff v1 v2
   putStrLn $ T.pack $ show diffResult
 --  v1 <- runCodeDbIdGen $ ingest $ toCodeTree Code.v1

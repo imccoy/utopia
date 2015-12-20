@@ -6,14 +6,16 @@ import qualified Data.Text as T
 import Test.Tasty
 import Test.Tasty.HUnit
 
-import DiffTree
+import DiffTree hiding (diffTree, srcNodeId)
+import qualified DiffTree
 import Diff (Mapping, mappingDst, mappingSrc, mappingCost, mappingChildren)
 import qualified Diff
 import Lam
 
 mappingChild n = _Just . mappingChildren . ix n
 
-srcNodeId = _Just . mappingSrc . to Diff.getId
+srcNodeId :: Getter Mapping T.Text
+srcNodeId = mappingSrc . DiffTree.srcNodeId . (to $ T.pack . show)
 
 tests :: TestTree
 tests = testGroup "DiffTree" 
@@ -25,8 +27,10 @@ tests = testGroup "DiffTree"
                       , Binding "n" $ Lit $ Number 4
                       ]
           diffResult = Diff.diff (diffTree v1) (diffTree v2)
-          bindingNameAndValue bindingMapping = (diffResult ^? bindingMapping . srcNodeId, diffResult ^? bindingMapping . mappingChild 0 . srcNodeId)
-       in do (Just "1.name", Just "1.lit") `compare` bindingNameAndValue (mappingChild 0) @?= EQ
+          bindingNameAndValue bindingMapping = (diffResult ^? bindingMapping . _Just . srcNodeId, diffResult ^? bindingMapping . mappingChild 0 . _Just . srcNodeId)
+       in do putStrLn $ show diffResult
+             putStrLn $ show $ bindingNameAndValue (mappingChild 0)
+             (Just "1.name", Just "1.lit") `compare` bindingNameAndValue (mappingChild 0) @?= EQ
              (Just "0.name", Just "0.lit") `compare` bindingNameAndValue (mappingChild 1) @?= EQ
   , testCase "simple value swap" $
       let v1 = Module [ Binding "Frederick" $ Lit $ Text "Aye aye, cap'n"
@@ -36,7 +40,7 @@ tests = testGroup "DiffTree"
                       , Binding "Gregory" $ Lit $ Text "Aye aye, cap'n"
                       ]
           diffResult = Diff.diff (diffTree v1) (diffTree v2)
-          bindingNameAndValue bindingMapping = (diffResult ^? bindingMapping . srcNodeId, diffResult ^? bindingMapping . mappingChild 0 . srcNodeId)
+          bindingNameAndValue bindingMapping = (diffResult ^? bindingMapping . _Just . srcNodeId, diffResult ^? bindingMapping . mappingChild 0 . _Just . srcNodeId)
        in do (Just "0.name", Just "1.lit") `compare` bindingNameAndValue (mappingChild 0) @?= EQ
              (Just "1.name", Just "0.lit") `compare` bindingNameAndValue (mappingChild 1) @?= EQ
   , testCase "ordering change with value change" $
@@ -47,7 +51,7 @@ tests = testGroup "DiffTree"
                       , Binding "none" $ Lit $ Number 4
                       ]
           diffResult = Diff.diff (diffTree v1) (diffTree v2)
-          bindingNameAndValue bindingMapping = (diffResult ^? bindingMapping . srcNodeId, diffResult ^? bindingMapping . mappingChild 0 . srcNodeId)
+          bindingNameAndValue bindingMapping = (diffResult ^? bindingMapping . _Just . srcNodeId, diffResult ^? bindingMapping . mappingChild 0 . _Just . srcNodeId)
        in do (Just "1.name", Just "1.lit") `compare` bindingNameAndValue (mappingChild 0) @?= EQ
              (Just "0.name", Just "0.lit") `compare` bindingNameAndValue (mappingChild 1) @?= EQ
   , testCase "simple value swap with value change" $
@@ -58,7 +62,7 @@ tests = testGroup "DiffTree"
                       , Binding "Gregory" $ Lit $ Text "Aye aye, captain"
                       ]
           diffResult = Diff.diff (diffTree v1) (diffTree v2)
-          bindingNameAndValue bindingMapping = (diffResult ^? bindingMapping . srcNodeId, diffResult ^? bindingMapping . mappingChild 0 . srcNodeId)
+          bindingNameAndValue bindingMapping = (diffResult ^? bindingMapping . _Just . srcNodeId, diffResult ^? bindingMapping . mappingChild 0 . _Just . srcNodeId)
        in do (Just "0.name", Just "1.lit") `compare` bindingNameAndValue (mappingChild 0) @?= EQ
              (Just "1.name", Just "0.lit") `compare` bindingNameAndValue (mappingChild 1) @?= EQ
 

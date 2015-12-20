@@ -15,7 +15,9 @@ cabal-version:       >=1.10
 library
   hs-source-dirs:      src
   exposed-modules:     Lam, Code, Diff, DiffTree
-  default-extensions:  NamedFieldPuns,
+  default-extensions:  FunctionalDependencies,
+                       MultiParamTypeClasses,
+                       NamedFieldPuns,
                        OverloadedStrings,
                        RecordWildCards,
                        TemplateHaskell
