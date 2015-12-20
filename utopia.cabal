@@ -12,21 +12,51 @@ build-type:          Simple
 -- extra-source-files:  
 cabal-version:       >=1.10
 
+library
+  hs-source-dirs:      src
+  exposed-modules:     Lam, Code, Diff, DiffTree
+  default-extensions:  NamedFieldPuns,
+                       OverloadedStrings,
+                       RecordWildCards,
+                       TemplateHaskell
+  default-language:    Haskell2010
+  build-depends:       base >=4.8 && <4.9,
+                       edit-distance,
+                       lens,
+                       safe,
+                       text
+
+test-suite test
+  default-language: Haskell2010
+  type: exitcode-stdio-1.0
+  hs-source-dirs: tests
+  main-is: test.hs
+  default-extensions:  NamedFieldPuns,
+                       OverloadedStrings,
+                       RankNTypes,
+                       RecordWildCards
+  build-depends: base,
+                 lens,
+                 tasty,
+                 tasty-hunit,
+                 text,
+                 utopia
+
 executable utopia
+  hs-source-dirs:      app
   main-is:             Main.hs
   -- other-modules:       
-  default-extensions:  OverloadedStrings, RecordWildCards, NamedFieldPuns
+  default-extensions:  NamedFieldPuns,
+                       OverloadedStrings,
+                       RecordWildCards
   build-depends:       base >=4.8 && <4.9,
                        containers,
-                       aeson,
                        bimap,
                        bytestring,
-                       http-client,
                        lens,
                        mtl,
                        safe,
                        text,
-                       uuid,
-                       wreq
-  hs-source-dirs:      src
+                       utopia,
+                       uuid
   default-language:    Haskell2010

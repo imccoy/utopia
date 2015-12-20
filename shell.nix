@@ -4,14 +4,19 @@ let
 
   inherit (nixpkgs) pkgs;
 
-  f = { mkDerivation, aeson, base, bimap, http-client, mtl, safe, stdenv, text, uuid, wreq }:
+  f = { mkDerivation, base, bimap, bytestring, containers
+      , edit-distance, lens, mtl, safe, stdenv, text, uuid, wreq
+      }:
       mkDerivation {
         pname = "utopia";
         version = "0.1.0.0";
         src = ./.;
-        isLibrary = false;
+        isLibrary = true;
         isExecutable = true;
-        executableHaskellDepends = [ aeson base bimap http-client mtl safe text uuid wreq ];
+        libraryHaskellDepends = [ base edit-distance safe text ];
+        executableHaskellDepends = [
+          base bimap bytestring containers lens mtl safe text uuid wreq
+        ];
         license = stdenv.lib.licenses.mit;
       };
 

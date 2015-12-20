@@ -9,9 +9,6 @@ import qualified Control.Exception as E
 import Control.Lens ((^.))
 import Control.Monad.Reader
 import qualified Control.Monad.State as State
-import Data.Aeson
-import Data.Aeson.Types (parseEither)
-import Data.Aeson.Encode
 import Data.Bimap (Bimap)
 import qualified Data.Bimap as Bimap
 import qualified Data.ByteString.Lazy as LB
@@ -27,12 +24,12 @@ import Data.Text.Lazy.Builder
 import qualified Data.UUID as UUID
 import qualified Data.UUID.V1
 import qualified Data.UUID.V4
-import Network.HTTP.Client (HttpException (NoResponseDataReceived))
-import Network.Wreq
 import Safe
 
 import qualified Lam
 import qualified Code
+import qualified Diff
+import DiffTree (diffTree)
 
 data CodeTree = CodeTree (Maybe Text) Text [CodeTree]
 
@@ -66,20 +63,21 @@ newtype CodeDbType = CodeDbType Text
 codeDbTypeText (CodeDbType ty) = ty
 
 data CodeDbTreeEntry = CodeDbTreeEntry CodeDbType [CodeDbId]
+data CodeDb = CodeDb { codeDbTree :: Map CodeDbId CodeDbTreeEntry, codeDbNames :: Map CodeDbId Text }
 
 data ProjectionCode = ProjectionCode CodeDbId CodeDbType [ProjectionCode]
+projectionCodeId (ProjectionCode id _ _) = id
+
 data Projection = Projection { projectionCode :: ProjectionCode, projectionNames :: Map CodeDbId Text }
 
 type CodeDbIdGen a = ReaderT Text IO a
 
-newtype SrcMapId = SrcMapId Integer
-  deriving (Show,Ord,Eq)
-newtype DstMapId = DstMapId Integer
-  deriving (Show,Ord,Eq)
 data SrcMapping = Delete | SrcChange CodeDbId | SrcMove CodeDbId
   deriving (Show)
 data DstMapping = Add | DstChange CodeDbId | DstMove CodeDbId
   deriving (Show)
+
+type Mappings = (Map CodeDbId SrcMapping, Map CodeDbId DstMapping)
 
 runCodeDbIdGen f = do
   baseUUID <- getBaseUUID
@@ -99,63 +97,20 @@ nextCodeDbId = do
   return $ CodeDbId $ baseUUID `T.append` "-" `T.append` UUID.toText tailUUID
 
 main = do
-  v1 <- runCodeDbIdGen $ ingest $ toCodeTree Code.v1
-  printProjection v1
-  v2 <- runCodeDbIdGen $ ingest $ toCodeTree Code.v2
-  printProjection v2
-  diffResult <- diffProjections v1 v2
-  case diffResult of
-    (Left e) -> putStrLn . T.pack $ "Couldn't parse diff: " ++ e
-    (Right (srcDiff, dstDiff)) -> do
-      putStrLn $ T.pack $ unlines $ map show $ Map.assocs srcDiff
-      putStrLn $ T.pack $ unlines $ map show $ Map.assocs dstDiff
-
-diffProjections src dst = do
-  let projectionIds = projectionIntKeys [src, dst]
-  let q = encode $ object [
-             "src" .= projectionJson projectionIds src,
-             "dst" .= projectionJson projectionIds dst
-          ]
-  response <- ntries 5 $ post "http://localhost:4754/" q
-  let mappingsJson = eitherDecode (response ^. responseBody) :: Either String Array
-  let mappings = parseMappings projectionIds =<< mappingsJson
-  return mappings
-
-ntries n action = action `E.catch` (handler n)
-  where handler 0 e = E.throwIO e
-        handler n NoResponseDataReceived = do putStrLn "NoResponseDataReceived, normally just a gumtree hissyfit, retrying"
-                                              threadDelay 2000000 -- 2s in microseconds
-                                              ntries (n - 1) action
-        handler _ e = E.throwIO e
-
-parseMappings :: Bimap CodeDbId Integer -> Array -> Either String (Map CodeDbId SrcMapping, Map CodeDbId DstMapping)
-parseMappings projectionIdInts  = foldM parseMapping (Map.empty, Map.empty)
-  where parseMapping (srcMappings, dstMappings) mapping = do
-          flip parseEither mapping $ withObject "mapping was not an object" $ \obj -> do
-            ty <- obj .: "ty"
-            let getSrc = obj .: "src" >>= (`Bimap.lookupR` projectionIdInts)
-            let getDst = obj .: "dst" >>= (`Bimap.lookupR` projectionIdInts)
-            case (ty :: Text) of
-              "change" -> do
-                src <- getSrc
-                dst <- getDst
-                return (Map.insert src (SrcChange dst) srcMappings
-                       ,Map.insert dst (DstChange src) dstMappings)
-              "move" -> do
-                src <- getSrc
-                dst <- getDst
-                return (Map.insert src (SrcMove dst) srcMappings
-                       ,Map.insert dst (DstMove src) dstMappings)
-              "add" -> do
-                dst <- getDst
-                return (srcMappings
-                       ,Map.insert dst Add dstMappings)
-              "delete" -> do
-                src <- getSrc
-                return (Map.insert src Delete srcMappings
-                       ,dstMappings)
-  
-  
+  let v1 = diffTree Code.v1
+  let v2 = diffTree Code.v2
+  let diffResult = Diff.diff v1 v2
+  putStrLn $ T.pack $ show diffResult
+--  v1 <- runCodeDbIdGen $ ingest $ toCodeTree Code.v1
+--  printProjection v1
+--  v2 <- runCodeDbIdGen $ ingest $ toCodeTree Code.v2
+--  printProjection v2
+--  diffResult <- diffProjections v1 v2
+--  case diffResult of
+--    (Left e) -> putStrLn . T.pack $ "Couldn't parse diff: " ++ e
+--    (Right (srcMappings, dstMappings)) -> do
+--      putStrLn $ T.pack $ unlines $ map show $ Map.assocs srcMappings
+--      putStrLn $ T.pack $ unlines $ map show $ Map.assocs dstMappings
 
 projectionIntKeys :: [Projection] -> Bimap CodeDbId Integer
 projectionIntKeys projections = let allKeys = Set.unions $ map (projectionCodeDbIds . projectionCode) projections
@@ -164,15 +119,6 @@ projectionIntKeys projections = let allKeys = Set.unions $ map (projectionCodeDb
 
 projectionCodeDbIds :: ProjectionCode -> Set CodeDbId
 projectionCodeDbIds (ProjectionCode id _ children) = id `Set.insert` (Set.unions $ map projectionCodeDbIds children)
-
-projectionJson projectionIdInts Projection{..} = projectionJson' projectionCode
-  where
-    projectionJson' (ProjectionCode id ty children) = object [
-                                                        "id" .= fromJustNote ("projectionJson' " ++ show id) (Bimap.lookup id projectionIdInts),
-                                                        "label" .= fromJustDef "" (Map.lookup id projectionNames),
-                                                        "typeLabel" .= codeDbTypeText ty,
-                                                        "children" .= map projectionJson' children
-                                                      ]
 
 ingest :: CodeTree -> CodeDbIdGen Projection
 ingest (CodeTree name ty children) = do
@@ -193,3 +139,12 @@ printProjection Projection{..} = printProjection' " " projectionCode where
     putStrLn $ codeDbIdText id `T.append` prefix `T.append` codeDbTypeText ty `T.append` " " `T.append` fromJustDef "" name
     forM_ children (printProjection' (prefix `T.append` "  "))
 
+newCodeDb :: Projection -> CodeDb
+newCodeDb Projection{..} = CodeDb { codeDbTree = treeOf projectionCode, codeDbNames = projectionNames }
+  where treeOf (ProjectionCode id ty children) = let childTrees = Map.unions $ map treeOf children
+                                                     childIds = map projectionCodeId children
+                                                  in Map.insert id (CodeDbTreeEntry ty childIds) childTrees
+
+
+--alterCodeDb :: Projection -> Mappings -> CodeDb -> CodeDb
+--alterCodeDb Projection{..} (srcMappings, dstMappings) codeDb = 
