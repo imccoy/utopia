@@ -11,10 +11,18 @@ import Diff (Mapping, mappingDst, mappingSrc, mappingCost, mappingChildren)
 import qualified Diff
 import Lam
 
-mappingChild n = _Just . mappingChildren . ix n
+mappingChild n = mappingChildren . ix n
 
-mappingSrcNodeId :: Getter Mapping T.Text
-mappingSrcNodeId = mappingSrc . DiffTree.srcNodeId . (to $ T.pack . show)
+mappingAt [] = id
+mappingAt (n:ns) = mappingChild n . mappingAt ns
+
+mappingIdsAt :: Mapping -> [Int] -> Maybe (T.Text, Maybe T.Text)
+mappingIdsAt mapping ids = do m <- mapping ^? mappingAt ids
+                              return ( m ^. mappingDst . dstNodeId . (to $ T.pack . show)
+
+                                     , m ^? mappingSrc . _Just . srcNodeId . (to $ T.pack . show)
+
+                                     )
 
 tests :: TestTree
 tests = testGroup "DiffTree" 
@@ -28,8 +36,8 @@ tests = testGroup "DiffTree"
                 , DiffTree "v2a" "Lit" (Just "2") []
                 ]
           diffResult = Diff.diff v1 v2
-       in do (Just "v1b") `compare` (diffResult ^? mappingChild 0 . _Just . mappingSrcNodeId) @?= EQ
-             (Just "v1a") `compare` (diffResult ^? mappingChild 1 . _Just . mappingSrcNodeId) @?= EQ
+       in do (Just ("v2b", Just "v1b")) `compare` mappingIdsAt diffResult [0] @?= EQ
+             (Just ("v2a", Just "v1a")) `compare` mappingIdsAt diffResult [1] @?= EQ
   , testCase "simple value swap" $
       let v1 = DiffTree "M" "Module" Nothing $
                 [ DiffTree "v1a" "Binding" (Just "Frederick") $
@@ -44,11 +52,10 @@ tests = testGroup "DiffTree"
                   [ DiffTree "v2a.value" "Lit" (Just "Aye Aye, cap'n") [] ]
                 ]
           diffResult = Diff.diff v1 v2
-       in do 
-             (Just "v1a") `compare` (diffResult ^? mappingChild 0 . _Just . mappingSrcNodeId) @?= EQ
-             (Just "v1b.value") `compare` (diffResult ^? mappingChild 0 . mappingChild 0 . _Just . mappingSrcNodeId) @?= EQ
-             (Just "v1b") `compare` (diffResult ^? mappingChild 1 . _Just . mappingSrcNodeId) @?= EQ
-             (Just "v1a.value") `compare` (diffResult ^? mappingChild 1 . mappingChild 0 . _Just . mappingSrcNodeId) @?= EQ
+       in do (Just ("v2a", Just "v1a")) `compare` mappingIdsAt diffResult [0] @?= EQ
+             (Just ("v2b.value", Just "v1b.value")) `compare` mappingIdsAt diffResult [0,0] @?= EQ
+             (Just ("v2b", Just "v1b")) `compare` mappingIdsAt diffResult [1] @?= EQ
+             (Just ("v2a.value", Just "v1a.value")) `compare` mappingIdsAt diffResult [1,0] @?= EQ
   , testCase "ordering change with value change" $
       let v1 = DiffTree "M" "Module" Nothing $
                 [ DiffTree "v1a" "Lit" (Just "mate") []
@@ -59,8 +66,8 @@ tests = testGroup "DiffTree"
                 , DiffTree "v2a" "Lit" (Just "mute") [] -- should map to mate, aka v1a
                 ]
           diffResult = Diff.diff v1 v2
-       in do (Just "v1b") `compare` (diffResult ^? mappingChild 0 . _Just . mappingSrcNodeId) @?= EQ
-             (Just "v1a") `compare` (diffResult ^? mappingChild 1 . _Just . mappingSrcNodeId) @?= EQ
+       in do (Just ("v2b", Just "v1b")) `compare` mappingIdsAt diffResult [0] @?= EQ
+             (Just ("v2a", Just "v1a")) `compare` mappingIdsAt diffResult [1] @?= EQ
   , testCase "simple value swap with value change" $
       let v1 = DiffTree "M" "Module" Nothing $
                 [ DiffTree "v1a" "Binding" (Just "Frederick") $
@@ -75,9 +82,38 @@ tests = testGroup "DiffTree"
                   [ DiffTree "v2a.value" "Lit" (Just "Aye Aye, cap'n") [] ]
                 ]
           diffResult = Diff.diff v1 v2
-       in do 
-             (Just "v1a") `compare` (diffResult ^? mappingChild 0 . _Just . mappingSrcNodeId) @?= EQ
-             (Just "v1b.value") `compare` (diffResult ^? mappingChild 0 . mappingChild 0 . _Just . mappingSrcNodeId) @?= EQ
-             (Just "v1b") `compare` (diffResult ^? mappingChild 1 . _Just . mappingSrcNodeId) @?= EQ
-             (Just "v1a.value") `compare` (diffResult ^? mappingChild 1 . mappingChild 0 . _Just . mappingSrcNodeId) @?= EQ
+       in do (Just ("v2a", Just "v1a")) `compare` mappingIdsAt diffResult [0] @?= EQ
+             (Just ("v2b.value", Just "v1b.value")) `compare` mappingIdsAt diffResult [0,0] @?= EQ
+             (Just ("v2b", Just "v1b")) `compare` mappingIdsAt diffResult [1] @?= EQ
+             (Just ("v2a.value", Just "v1a.value")) `compare` mappingIdsAt diffResult [1,0] @?= EQ
+  , testCase "moving something across the tree" $
+      let v1 = DiffTree "M" "Module" Nothing $
+                [ DiffTree "v1a" "Binding" (Just "Frederick") $
+                  [ DiffTree "v1a.1" "Lit" (Just "Aye Aye, captain") [] ]
+                , DiffTree "v1b" "Binding" (Just "George") []
+                ]
+          v2 = DiffTree "M" "Module" Nothing $
+                [ DiffTree "v2a" "Binding" (Just "Frederick") []
+                , DiffTree "v2b" "Binding" (Just "George") $
+                  [ DiffTree "v2b.1" "Lit" (Just "Aye Aye, captain") [] ]
+                ]
+          diffResult = Diff.diff v1 v2
+       in do (Just ("v2a", Just "v1a")) `compare` mappingIdsAt diffResult [0] @?= EQ
+             (Just ("v2b", Just "v1b")) `compare` mappingIdsAt diffResult [1] @?= EQ
+             (Just ("v2b.1", Just "v1a.1")) `compare` mappingIdsAt diffResult [1,0] @?= EQ
+  , testCase "moving something down the tree" $
+      let v1 = DiffTree "M" "Module" Nothing $
+                [ DiffTree "v1a" "Binding" (Just "Frederick") $
+                  [ DiffTree "v1c" "Lit" (Just "Aye Aye, captain") [] ]
+                ]
+          v2 = DiffTree "M" "Module" Nothing $
+                [ DiffTree "v2a" "Binding" (Just "Frederick") $
+                  [ DiffTree "v2b" "Hmmdyhmm" (Just "Says") $
+                    [ DiffTree "v2c" "Lit" (Just "Aye Aye, captain") [] ]
+                  ]
+                ]
+          diffResult = Diff.diff v1 v2
+       in do (Just ("v2a", Just "v1a")) `compare` mappingIdsAt diffResult [0] @?= EQ
+             (Just ("v2b", Nothing)) `compare` mappingIdsAt diffResult [0,0] @?= EQ
+             (Just ("v2c", Just "v1c")) `compare` mappingIdsAt diffResult [0,0,0] @?= EQ
   ]

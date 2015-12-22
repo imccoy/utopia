@@ -47,17 +47,17 @@ import DiffTree
  -}
 
 data Mapping = Mapping { _mappingDst :: DstNode
-                       , _mappingSrc :: SrcNode
+                       , _mappingSrc :: Maybe SrcNode
                        , _mappingCost :: Int
-                       , _mappingChildren :: [Maybe Mapping]
+                       , _mappingChildren :: [Mapping]
                        }
 makeLenses ''Mapping
 
 instance Show Mapping where
   show = unlines . printMappings' ""
     where printMappings' prefix m = (printMapping prefix m):(concat $ printChildren (prefix ++ "  ") m)
-          printMapping prefix (Mapping d s _ _) = prefix ++ show (d ^. dstNodeId) ++ "<-" ++ show (s ^. srcNodeId)
-          printChildren prefix (Mapping _ _ _ children) = [maybe [prefix ++ "Nothing"] (printMappings' prefix) child | child <- children]
+          printMapping prefix (Mapping d s _ _) = prefix ++ show (d ^. dstNodeId) ++ "<-" ++ show (fmap (^. srcNodeId) s)
+          printChildren prefix (Mapping _ _ _ children) = [printMappings' prefix child | child <- children]
 
 transitiveClosure :: (a -> [a]) -> a -> [a]
 transitiveClosure f v = v:(concat [transitiveClosure f c | c <- f v])
@@ -73,22 +73,22 @@ renameCost _ _ _ _       = Nothing
 
 scoreMapping :: Mapping -> Int
 scoreMapping (Mapping dst src renameCost childMappings) = numUnmappedChildren * 10 + numDroppedSrcChildren * 5 + renameCost
-  where numUnmappedChildren = length $ filter isNothing childMappings
-        numDroppedSrcChildren = let srcChildIds = map (^. srcNodeId) (src ^. srcNodeChildren)
-                                    childMappingSrcIds = map (^. srcNodeId) $ map (^. mappingSrc) (catMaybes childMappings)
+  where numUnmappedChildren = length $ filter (isNothing . _mappingSrc) childMappings
+        numDroppedSrcChildren = let srcChildIds = map (^. srcNodeId) (src ^. _Just . srcNodeChildren)
+                                    childMappingSrcIds = map (^. srcNodeId) $ catMaybes $ map (^. mappingSrc) childMappings
                                  in length $ srcChildIds \\ childMappingSrcIds
 
 compareMappings a b = compare (scoreMapping a) (scoreMapping b)
 
-findMatchingNode :: DstNode -> [Maybe Mapping] -> SrcNode -> Maybe Mapping
+findMatchingNode :: DstNode -> [Mapping] -> SrcNode -> Mapping
 findMatchingNode dst dstChildMappings = findMatchingNode'
   where findMatchingNode' src = case possibleMappings src of
-                                  [] -> Nothing
-                                  mappings -> Just $ minimumBy compareMappings mappings
+                                  [] -> Mapping dst Nothing maxBound dstChildMappings
+                                  mappings -> minimumBy compareMappings mappings
         possibleMappings src = catMaybes [ mappingTo srcNode | srcNode <- transitiveClosure (^. srcNodeChildren) src]
-        mappingTo src = Mapping dst src <$> renameCost (src ^. diffTree . label) (src ^. diffTree . name) (dst ^. diffTree . label) (dst ^. diffTree . name) <*> pure dstChildMappings
+        mappingTo src = Mapping dst (Just src) <$> renameCost (src ^. diffTree . label) (src ^. diffTree . name) (dst ^. diffTree . label) (dst ^. diffTree . name) <*> pure dstChildMappings
 
-matchTrees :: SrcNode -> DstNode -> Maybe Mapping
+matchTrees :: SrcNode -> DstNode -> Mapping
 matchTrees src = matchTrees'
   where matchTrees' dst = let dstChildMappings = map (matchTrees src) (dst ^. dstNodeChildren)
                            in findMatchingNode dst dstChildMappings src
