@@ -18,7 +18,7 @@ v1 = Module [ Binding "n" $ Lit $ Number 4
             , Binding "m" $ Lit $ Number 2
             ]
 
-v2 = Module [ Binding "m" $ Lit $ Number 4
-            , Binding "n" $ Lit $ Number 2
+v2 = Module [ Binding "m" $ Lit $ Number 2
+            , Binding "n" $ Lit $ Number 4
             ]
 
