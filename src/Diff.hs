@@ -1,5 +1,27 @@
 module Diff (diff, DiffTree(..), Mapping, mappingDst, mappingSrc, mappingCost, mappingChildren) where
 
+{-
+ - The algorithm here is inspired by the gumtree paper and code:
+ -    https://github.com/GumTreeDiff/gumtree
+ -    "Fine-grained and accurate source code differencing", Falleri, Morandart, Blanc, Martinez & Monperrus. ASE '14 Proceedings of the 29th ACM/IEEE international conference on Automated software engineering
+ -
+ - Their stuff is a lot cooler than mine, but I didn't find a way to get the results I wanted from it.
+ -
+ - Ideas for future work:
+ -   * change Mapping to have a `Maybe (SrcNode, Int)` instead of a `Maybe SrcNode` and
+ -     an always-present mapping cost. This would allow more sophisticated costs for
+ -     invented nodes.
+ -   * optimise the costs (both those defined here and the defaultEditCosts from the
+ -     levenshtein module)
+ -   * work out if this code is weird from a lens idiom perspective.
+ -     For example, do we want to do `isNothing . _mappingSrc` or `mappingSrc . to isNothing`
+ -     or something else?
+ -   * when a subtree occurs in multiple places in src, pick the one that is closest to us, so
+ -     when mapping `(n, n)` to `(n, n + 3 * ( n))` we should map src's first n to dst's first
+ -     and src's second to dst's second and third.
+ -   * favour using each node exactly once?
+ -}
+
 import Control.Lens
 import Data.List
 import Data.Text (Text)
@@ -10,42 +32,6 @@ import Safe (fromJustDef)
 import Text.EditDistance
 
 import DiffTree
-
-{- 
- - EASY:
- -
- - BigStructure
- -   Text "A"
- -     ->
- - BigStructure
- -   Text "B"
- -
- - The Text node gets matched A->B with a cost of 1, so that's the cost of the overall change
- -
- -------------------------
- -
- - EASY:
- -
- - Text "A"
- -   BigStructure
- -     ->
- - Text "B"
- -   BigStructure
- -
- - Children match perfectly, so then we just care about the Text nodes
- --------------------------
- -
- - HARD:
- -
- - Text "A"
- -   BigStructure
- -     Text "C"
- -     ->
- - Text "B"
- -   BigStructure
- -     Text "D"
- -
- -}
 
 data Mapping = Mapping { _mappingDst :: DstNode
                        , _mappingSrc :: Maybe SrcNode
@@ -72,8 +58,13 @@ renameCost srcLabel Nothing dstLabel Nothing
   | otherwise            = Nothing
 renameCost _ _ _ _       = Nothing
 
+-- I totally just made these numbers up
+childInDstNotMappedCost = 10
+childInSrcNotHereCost = 5
+inventedNodeCost = 100 
+
 scoreMapping :: Mapping -> Int
-scoreMapping (Mapping dst src renameCost childMappings) = numUnmappedChildren * 10 + numDroppedSrcChildren * 5 + renameCost
+scoreMapping (Mapping dst src renameCost childMappings) = numUnmappedChildren * childInDstNotMappedCost + numDroppedSrcChildren * childInSrcNotHereCost + renameCost
   where numUnmappedChildren = length $ filter (isNothing . _mappingSrc) childMappings
         numDroppedSrcChildren = let srcChildIds = map (^. srcNodeId) (src ^. _Just . srcNodeChildren)
                                     childMappingSrcIds = map (^. srcNodeId) $ catMaybes $ map (^. mappingSrc) childMappings
@@ -84,7 +75,7 @@ compareMappings a b = compare (scoreMapping a) (scoreMapping b)
 findMatchingNode :: DstNode -> [Mapping] -> SrcNode -> Mapping
 findMatchingNode dst dstChildMappings = findMatchingNode'
   where findMatchingNode' src = case possibleMappings src of
-                                  [] -> Mapping dst Nothing 100 dstChildMappings
+                                  [] -> Mapping dst Nothing inventedNodeCost dstChildMappings
                                   mappings -> minimumBy compareMappings mappings
         possibleMappings src = catMaybes [ mappingTo srcNode | srcNode <- transitiveClosure (^. srcNodeChildren) src]
         mappingTo src = Mapping dst (Just src) <$> renameCost (src ^. diffTree . label) (src ^. diffTree . name) (dst ^. diffTree . label) (dst ^. diffTree . name) <*> pure dstChildMappings
