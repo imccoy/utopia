@@ -66,6 +66,6 @@ appArgsDiffTree idPrefix args = DiffTree (idPrefix `T.append` ".args")
                                          "AppArgs" Nothing
                                          [DiffTree (idPrefix `T.append` ".args[" `T.append` T.pack (show n) `T.append` "]")
                                                    "AppArg" Nothing
-                                                   []
+                                                   [expDiffTree (idPrefix `T.append` ".args[" `T.append` T.pack (show n) `T.append` "]") arg]
                                          |(n,arg) <- zip [0..] args
                                          ]

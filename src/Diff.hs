@@ -4,6 +4,7 @@ import Control.Lens
 import Data.List
 import Data.Text (Text)
 import Data.Maybe
+import Debug.Trace
 import Safe (fromJustDef)
 
 import Text.EditDistance
@@ -83,7 +84,7 @@ compareMappings a b = compare (scoreMapping a) (scoreMapping b)
 findMatchingNode :: DstNode -> [Mapping] -> SrcNode -> Mapping
 findMatchingNode dst dstChildMappings = findMatchingNode'
   where findMatchingNode' src = case possibleMappings src of
-                                  [] -> Mapping dst Nothing maxBound dstChildMappings
+                                  [] -> Mapping dst Nothing 100 dstChildMappings
                                   mappings -> minimumBy compareMappings mappings
         possibleMappings src = catMaybes [ mappingTo srcNode | srcNode <- transitiveClosure (^. srcNodeChildren) src]
         mappingTo src = Mapping dst (Just src) <$> renameCost (src ^. diffTree . label) (src ^. diffTree . name) (dst ^. diffTree . label) (dst ^. diffTree . name) <*> pure dstChildMappings
