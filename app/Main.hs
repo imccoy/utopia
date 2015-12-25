@@ -9,8 +9,6 @@ import qualified Control.Exception as E
 import Control.Lens ((^.))
 import Control.Monad.Reader
 import qualified Control.Monad.State as State
-import Data.Bimap (Bimap)
-import qualified Data.Bimap as Bimap
 import qualified Data.ByteString.Lazy as LB
 import Data.Map (Map)
 import qualified Data.Map as Map
@@ -101,21 +99,12 @@ main = do
   let v2 = Lam.diffTree Code.v2
   let diffResult = Diff.diff v1 v2
   putStrLn $ T.pack $ show diffResult
---  v1 <- runCodeDbIdGen $ ingest $ toCodeTree Code.v1
---  printProjection v1
---  v2 <- runCodeDbIdGen $ ingest $ toCodeTree Code.v2
---  printProjection v2
---  diffResult <- diffProjections v1 v2
---  case diffResult of
---    (Left e) -> putStrLn . T.pack $ "Couldn't parse diff: " ++ e
---    (Right (srcMappings, dstMappings)) -> do
---      putStrLn $ T.pack $ unlines $ map show $ Map.assocs srcMappings
---      putStrLn $ T.pack $ unlines $ map show $ Map.assocs dstMappings
-
-projectionIntKeys :: [Projection] -> Bimap CodeDbId Integer
-projectionIntKeys projections = let allKeys = Set.unions $ map (projectionCodeDbIds . projectionCode) projections
-                                    assocs = zip (Set.toList allKeys) [0..] 
-                                 in Bimap.fromList assocs
+  v1 <- runCodeDbIdGen $ ingest $ toCodeTree Code.v1
+  printProjection v1
+  v2 <- runCodeDbIdGen $ ingest $ toCodeTree Code.v2
+  printProjection v2
+  let diffResult = diffProjections v1 v2
+  putStrLn $ T.pack $ show diffResult
 
 projectionCodeDbIds :: ProjectionCode -> Set CodeDbId
 projectionCodeDbIds (ProjectionCode id _ children) = id `Set.insert` (Set.unions $ map projectionCodeDbIds children)
@@ -138,6 +127,13 @@ printProjection Projection{..} = printProjection' " " projectionCode where
     let name = Map.lookup id projectionNames
     putStrLn $ codeDbIdText id `T.append` prefix `T.append` codeDbTypeText ty `T.append` " " `T.append` fromJustDef "" name
     forM_ children (printProjection' (prefix `T.append` "  "))
+
+diffProjections :: Projection -> Projection -> Diff.Mapping
+diffProjections src dst = Diff.diff (projectionDiffTree src) (projectionDiffTree dst)
+
+projectionDiffTree :: Projection -> DiffTree.DiffTree
+projectionDiffTree Projection{..} = go projectionCode
+  where go (ProjectionCode id ty children) = DiffTree.DiffTree (codeDbIdText id) (codeDbTypeText ty) (Map.lookup id projectionNames) (map go children)
 
 newCodeDb :: Projection -> CodeDb
 newCodeDb Projection{..} = CodeDb { codeDbTree = treeOf projectionCode, codeDbNames = projectionNames }
