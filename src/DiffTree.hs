@@ -1,8 +1,11 @@
-module DiffTree (DiffTree(..), label, name, SrcNode(..), DstNode(..), diffTree, SrcNodeId, DstNodeId, srcNodeId, dstNodeId, srcNodeChildren, dstNodeChildren) where
+module DiffTree (DiffTree(..), label, name, SrcNode(..), DstNode(..), diffTree, SrcNodeId, DstNodeId, srcNodeId, dstNodeId, srcNodeChildren, dstNodeChildren, humanReadableIds) where
 
 import Control.Lens
 import Data.Text (Text)
 import qualified Data.Text as T
+
+import CodeTree (CodeTree)
+import qualified CodeTree
 
 data DiffTree = DiffTree { _diffTreeId :: Text, _label :: Text, _name :: Maybe Text, _diffTreeChildren :: [DiffTree] }
   deriving (Eq, Show)
@@ -40,3 +43,13 @@ srcNodeChildren = diffTree . diffTreeChildren . (to (map SrcNode))
 dstNodeChildren :: Getter DstNode [DstNode]
 dstNodeChildren = diffTree . diffTreeChildren . (to (map DstNode))
 
+humanReadableIds :: CodeTree -> DiffTree
+humanReadableIds = go "0"
+  where go prefix codeTree = let id = prefix `T.append` "." `T.append` (codeTree ^. CodeTree.label)
+                              in DiffTree id
+                                          (codeTree ^. CodeTree.label)
+                                          (codeTree ^. CodeTree.name)
+                                          [ go (T.concat [id, "[", T.pack (show n), "]"]) child
+                                          | (n, child) <- zip [0..] (codeTree ^. CodeTree.children)
+                                          ]
+ 

@@ -2,7 +2,7 @@ module Lam where
 
 import qualified Data.Text as T
 
-import DiffTree
+import CodeTree
 
 type Name = T.Text
 
@@ -14,58 +14,45 @@ data Literal = Number Int | Text T.Text
 
 data Exp = Lam [Name] Exp | Var Name | App Exp [Exp] | Lit Literal
 
+codeTree :: Module -> CodeTree
+codeTree (Module bindings)
+  = CodeTree "Module" Nothing
+             [bindingCodeTree binding | binding <- bindings]
 
-diffTree (Module bindings)
-  = DiffTree "M"
-             "Module" Nothing
-             [bindingDiffTree (T.pack $ show n) binding | (n, binding) <- zip [0..] bindings]
+bindingCodeTree (Binding name exp)
+  = CodeTree "Binding" (Just name)
+             [expCodeTree exp]
 
-bindingDiffTree idPrefix (Binding name exp)
-  = DiffTree (idPrefix `T.append` ".name") 
-             "Binding" (Just name)
-             [expDiffTree idPrefix exp]
-
-expDiffTree idPrefix = go
-  where go (Lam args body) = DiffTree (idPrefix `T.append` ".lam")
-                                      "Lam" Nothing
-                                      [lamArgsDiffTree (idPrefix `T.append` ".lam") args
-                                      ,lamBodyDiffTree (idPrefix `T.append` ".lam") body
+expCodeTree = go
+  where go (Lam args body) = CodeTree "Lam" Nothing
+                                      [lamArgsCodeTree args
+                                      ,lamBodyCodeTree body
                                       ]
-        go (Var name) = DiffTree (idPrefix `T.append` ".var")
-                                 "Var" (Just name)
+        go (Var name) = CodeTree "Var" (Just name)
                                  []
-        go (App f args) = DiffTree (idPrefix `T.append` ".app")
-                                   "App" Nothing
-                                   [appFunDiffTree (idPrefix `T.append` ".app") f
-                                   ,appArgsDiffTree (idPrefix `T.append` ".app") args
+        go (App f args) = CodeTree "App" Nothing
+                                   [appFunCodeTree f
+                                   ,appArgsCodeTree args
                                    ]
-        go (Lit ((Number n))) = DiffTree (idPrefix `T.append` ".lit")
-                                         "LitNumber" (Just (T.pack $ show n))
+        go (Lit ((Number n))) = CodeTree "LitNumber" (Just (T.pack $ show n))
                                          []
-        go (Lit ((Text t))) = DiffTree (idPrefix `T.append` ".lit")
-                                       "LitText" (Just t)
+        go (Lit ((Text t))) = CodeTree "LitText" (Just t)
                                        []
 
-lamArgsDiffTree idPrefix args = DiffTree (idPrefix `T.append` ".args")
-                                         "LamArgs" Nothing
-                                         [DiffTree (idPrefix `T.append` ".args[" `T.append` T.pack (show n) `T.append` "]")
-                                                   "LamArg" (Just arg)
-                                                   []
-                                         |(n,arg) <- zip [0..] args
-                                         ]
+lamArgsCodeTree args = CodeTree "LamArgs" Nothing
+                                [CodeTree "LamArg" (Just arg)
+                                          []
+                                |arg <- args
+                                ]
 
-lamBodyDiffTree idPrefix body = DiffTree (idPrefix `T.append` ".body")
-                                         "LamBody" Nothing
-                                         [expDiffTree (idPrefix `T.append` ".body") body]
+lamBodyCodeTree body = CodeTree "LamBody" Nothing
+                                [expCodeTree body]
 
-appFunDiffTree idPrefix fun = DiffTree (idPrefix `T.append` ".fun")
-                                       "AppFun" Nothing
-                                       [expDiffTree (idPrefix `T.append` ".fun") fun]
+appFunCodeTree fun = CodeTree "AppFun" Nothing
+                              [expCodeTree fun]
 
-appArgsDiffTree idPrefix args = DiffTree (idPrefix `T.append` ".args")
-                                         "AppArgs" Nothing
-                                         [DiffTree (idPrefix `T.append` ".args[" `T.append` T.pack (show n) `T.append` "]")
-                                                   "AppArg" Nothing
-                                                   [expDiffTree (idPrefix `T.append` ".args[" `T.append` T.pack (show n) `T.append` "]") arg]
-                                         |(n,arg) <- zip [0..] args
-                                         ]
+appArgsCodeTree args = CodeTree "AppArgs" Nothing
+                                [CodeTree "AppArg" Nothing
+                                          [expCodeTree arg]
+                                | arg <- args
+                                ]
