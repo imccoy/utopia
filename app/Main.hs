@@ -86,11 +86,11 @@ main = do
                              (DiffTree.DiffTree "M2" "Module" Nothing v2)
   putStrLn $ T.pack $ show diffResult
 
-  v1projection <- runCodeDbIdGen $ codeTreeProjection $ Lam.codeTree Code.v1
+  v1projection <- runCodeDbIdGen $ codeTreeListProjection $ Lam.codeTree Code.v1
   let initialDb = initFromProjection v1projection
   printProjection v1projection
 
-  v2projection <- runCodeDbIdGen $ codeTreeProjection $ Lam.codeTree Code.v2
+  v2projection <- runCodeDbIdGen $ codeTreeListProjection $ Lam.codeTree Code.v2
   printProjection v2projection
 
   let diffResult = diffProjection initialDb v2projection
@@ -99,15 +99,15 @@ main = do
 projectionCodeDbIds :: ProjectionCode -> Set CodeDbId
 projectionCodeDbIds (ProjectionCode id _ children) = id `Set.insert` (Set.unions $ map projectionCodeDbIds children)
 
-codeTreeProjection :: [CodeTree.CodeTree] -> CodeDbIdGen Projection
-codeTreeProjection codeTrees = do
-  (projectionsCode, projectionsNames) <- mapM codeTreeProjection' codeTrees >>= return . unzip
+codeTreeListProjection :: [CodeTree.CodeTree] -> CodeDbIdGen Projection
+codeTreeListProjection codeTrees = do
+  (projectionsCode, projectionsNames) <- mapM codeTreeProjection codeTrees >>= return . unzip
   return $ Projection projectionsCode (Map.unions projectionsNames)
 
-codeTreeProjection' :: CodeTree.CodeTree -> CodeDbIdGen (ProjectionCode, Map CodeDbId Text)
-codeTreeProjection' (CodeTree.CodeTree label name children) = do
+codeTreeProjection :: CodeTree.CodeTree -> CodeDbIdGen (ProjectionCode, Map CodeDbId Text)
+codeTreeProjection (CodeTree.CodeTree label name children) = do
   id <- nextCodeDbId
-  (childrenProjectionCode, childNameMaps) <- mapM codeTreeProjection' children >>= return . unzip
+  (childrenProjectionCode, childNameMaps) <- mapM codeTreeProjection children >>= return . unzip
   let projectionCode = ProjectionCode id (CodeDbType label) childrenProjectionCode
 
   let childNamesMap = Map.unions childNameMaps
@@ -115,7 +115,7 @@ codeTreeProjection' (CodeTree.CodeTree label name children) = do
   return (projectionCode, projectionNames)
 
 initDb :: [CodeTree.CodeTree] -> CodeDbIdGen ([CodeDbId], CodeDb)
-initDb codeTree = codeTreeProjection codeTree >>= return . initFromProjection
+initDb codeTree = codeTreeListProjection codeTree >>= return . initFromProjection
 
 initFromProjection :: Projection -> ([CodeDbId], CodeDb)
 initFromProjection Projection{..} = (id, CodeDb tree projectionNames)
@@ -147,10 +147,7 @@ projectionDiffTree Projection{..} = DiffTree.DiffTree "M.Projection" "Module" No
 
 codeDbProjection :: ([CodeDbId], CodeDb) -> Projection
 codeDbProjection (codeDbIds, CodeDb{..}) = Projection (map project codeDbIds) codeDbNames
-  where roots = let parentedNodes = Set.unions [ Set.fromList children
-                                                          | (CodeDbTreeEntry _ children) <- Map.elems codeDbTree]
-                            in Map.filterWithKey (\k a -> k `Set.member` parentedNodes) codeDbTree
-        project nodeId = let (CodeDbTreeEntry ty children) = fromJustNote "EEEK" $ Map.lookup nodeId codeDbTree
+  where project nodeId = let (CodeDbTreeEntry ty children) = fromJustNote "EEEK" $ Map.lookup nodeId codeDbTree
                           in ProjectionCode nodeId ty $ map project children
 
 codeDbDiffTree :: ([CodeDbId], CodeDb) -> DiffTree.DiffTree
