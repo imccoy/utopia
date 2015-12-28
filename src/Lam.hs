@@ -14,10 +14,9 @@ data Literal = Number Int | Text T.Text
 
 data Exp = Lam [Name] Exp | Var Name | App Exp [Exp] | Lit Literal
 
-codeTree :: Module -> CodeTree
+codeTree :: Module -> [CodeTree]
 codeTree (Module bindings)
-  = CodeTree "Module" Nothing
-             [bindingCodeTree binding | binding <- bindings]
+  = [bindingCodeTree binding | binding <- bindings]
 
 bindingCodeTree (Binding name exp)
   = CodeTree "Binding" (Just name)

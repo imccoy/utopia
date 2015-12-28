@@ -45,7 +45,7 @@ data CodeDb = CodeDb { codeDbTree :: CodeDbTree, codeDbNames :: Map CodeDbId Tex
 data ProjectionCode = ProjectionCode CodeDbId CodeDbType [ProjectionCode]
 projectionCodeId (ProjectionCode id _ _) = id
 
-data Projection = Projection { projectionCode :: ProjectionCode, projectionNames :: Map CodeDbId Text }
+data Projection = Projection { projectionCode :: [ProjectionCode], projectionNames :: Map CodeDbId Text }
 
 data SrcMapping = Delete | SrcChange CodeDbId | SrcMove CodeDbId
   deriving (Show)
@@ -82,7 +82,8 @@ withIds codeTree = do
 main = do
   let v1 = DiffTree.humanReadableIds $ Lam.codeTree Code.v1
   let v2 = DiffTree.humanReadableIds $ Lam.codeTree Code.v2
-  let diffResult = Diff.diff v1 v2
+  let diffResult = Diff.diff (DiffTree.DiffTree "M1" "Module" Nothing v1)
+                             (DiffTree.DiffTree "M2" "Module" Nothing v2)
   putStrLn $ T.pack $ show diffResult
 
   v1projection <- runCodeDbIdGen $ codeTreeProjection $ Lam.codeTree Code.v1
@@ -98,24 +99,31 @@ main = do
 projectionCodeDbIds :: ProjectionCode -> Set CodeDbId
 projectionCodeDbIds (ProjectionCode id _ children) = id `Set.insert` (Set.unions $ map projectionCodeDbIds children)
 
-codeTreeProjection :: CodeTree.CodeTree -> CodeDbIdGen Projection
-codeTreeProjection (CodeTree.CodeTree label name children) = do
+codeTreeProjection :: [CodeTree.CodeTree] -> CodeDbIdGen Projection
+codeTreeProjection codeTrees = do
+  (projectionsCode, projectionsNames) <- mapM codeTreeProjection' codeTrees >>= return . unzip
+  return $ Projection projectionsCode (Map.unions projectionsNames)
+
+codeTreeProjection' :: CodeTree.CodeTree -> CodeDbIdGen (ProjectionCode, Map CodeDbId Text)
+codeTreeProjection' (CodeTree.CodeTree label name children) = do
   id <- nextCodeDbId
-  childProjections <- mapM codeTreeProjection children
-  let childrenProjectionCode = map projectionCode childProjections
+  (childrenProjectionCode, childNameMaps) <- mapM codeTreeProjection' children >>= return . unzip
   let projectionCode = ProjectionCode id (CodeDbType label) childrenProjectionCode
 
-  let childNameMaps = map projectionNames childProjections
   let childNamesMap = Map.unions childNameMaps
   let projectionNames = maybe childNamesMap (\name -> Map.insert id name childNamesMap) name
-  return $ Projection { projectionCode, projectionNames }
+  return (projectionCode, projectionNames)
 
-initDb :: CodeTree.CodeTree -> CodeDbIdGen (CodeDbId, CodeDb)
+initDb :: [CodeTree.CodeTree] -> CodeDbIdGen ([CodeDbId], CodeDb)
 initDb codeTree = codeTreeProjection codeTree >>= return . initFromProjection
 
-initFromProjection :: Projection -> (CodeDbId, CodeDb)
+initFromProjection :: Projection -> ([CodeDbId], CodeDb)
 initFromProjection Projection{..} = (id, CodeDb tree projectionNames)
-  where (id, tree) = codeDbTreeFromProjectionCode projectionCode
+  where (id, tree) = codeDbTreeFromProjectionCodeList projectionCode
+
+codeDbTreeFromProjectionCodeList :: [ProjectionCode] -> ([CodeDbId], CodeDbTree)
+codeDbTreeFromProjectionCodeList projectionCodeList = (ids, Map.unions trees)
+  where (ids, trees) = unzip $ map codeDbTreeFromProjectionCode $ projectionCodeList
 
 codeDbTreeFromProjectionCode :: ProjectionCode -> (CodeDbId, CodeDbTree)
 codeDbTreeFromProjectionCode (ProjectionCode id ty children) = (id, Map.insert id entry childrenCodeDbTree)
@@ -124,28 +132,28 @@ codeDbTreeFromProjectionCode (ProjectionCode id ty children) = (id, Map.insert i
         entry = CodeDbTreeEntry ty childrenCodeDbIds
 
 printProjection :: Projection -> IO ()
-printProjection Projection{..} = printProjection' " " projectionCode where
+printProjection Projection{..} = mapM_ (printProjection' " ") projectionCode where
   printProjection' prefix (ProjectionCode id ty children) = do
     let name = Map.lookup id projectionNames
     putStrLn $ codeDbIdText id `T.append` prefix `T.append` codeDbTypeText ty `T.append` " " `T.append` fromJustDef "" name
     forM_ children (printProjection' (prefix `T.append` "  "))
 
-diffProjection :: (CodeDbId, CodeDb) -> Projection -> Diff.Mapping
+diffProjection :: ([CodeDbId], CodeDb) -> Projection -> Diff.Mapping
 diffProjection codeDb projection = Diff.diff (codeDbDiffTree codeDb) (projectionDiffTree projection)
 
 projectionDiffTree :: Projection -> DiffTree.DiffTree
-projectionDiffTree Projection{..} = go projectionCode
+projectionDiffTree Projection{..} = DiffTree.DiffTree "M.Projection" "Module" Nothing $ map go projectionCode
   where go (ProjectionCode id ty children) = DiffTree.DiffTree (codeDbIdText id) (codeDbTypeText ty) (Map.lookup id projectionNames) (map go children)
 
-codeDbProjection :: (CodeDbId, CodeDb) -> Projection
-codeDbProjection (codeDbId, CodeDb{..}) = Projection (project codeDbId) codeDbNames
+codeDbProjection :: ([CodeDbId], CodeDb) -> Projection
+codeDbProjection (codeDbIds, CodeDb{..}) = Projection (map project codeDbIds) codeDbNames
   where roots = let parentedNodes = Set.unions [ Set.fromList children
                                                           | (CodeDbTreeEntry _ children) <- Map.elems codeDbTree]
                             in Map.filterWithKey (\k a -> k `Set.member` parentedNodes) codeDbTree
         project nodeId = let (CodeDbTreeEntry ty children) = fromJustNote "EEEK" $ Map.lookup nodeId codeDbTree
                           in ProjectionCode nodeId ty $ map project children
 
-codeDbDiffTree :: (CodeDbId, CodeDb) -> DiffTree.DiffTree
+codeDbDiffTree :: ([CodeDbId], CodeDb) -> DiffTree.DiffTree
 codeDbDiffTree = projectionDiffTree . codeDbProjection 
 
 --alterCodeDb :: Projection -> Mappings -> CodeDb -> CodeDb

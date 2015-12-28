@@ -43,8 +43,10 @@ srcNodeChildren = diffTree . diffTreeChildren . (to (map SrcNode))
 dstNodeChildren :: Getter DstNode [DstNode]
 dstNodeChildren = diffTree . diffTreeChildren . (to (map DstNode))
 
-humanReadableIds :: CodeTree -> DiffTree
-humanReadableIds = go "0"
+humanReadableIds :: [CodeTree] -> [DiffTree]
+humanReadableIds nodes = [ go (T.pack $ show n) node
+                         | (n, node) <- zip [0..] nodes
+                         ]
   where go prefix codeTree = let id = prefix `T.append` "." `T.append` (codeTree ^. CodeTree.label)
                               in DiffTree id
                                           (codeTree ^. CodeTree.label)
