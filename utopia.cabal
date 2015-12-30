@@ -53,10 +53,11 @@ executable utopia
                        RecordWildCards
   build-depends:       base >=4.8 && <4.9,
                        containers,
-                       bimap,
+                       blaze-html,
                        bytestring,
                        lens,
                        mtl,
+                       process,
                        safe,
                        text,
                        utopia,

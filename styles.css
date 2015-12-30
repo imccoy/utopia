@@ -1,0 +1,7 @@
+.src-node, .dst-node {
+  padding-left: 1em;
+}
+
+.selected {
+  border: 2px solid red;
+}

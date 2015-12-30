@@ -23,12 +23,17 @@ import qualified Data.UUID as UUID
 import qualified Data.UUID.V1
 import qualified Data.UUID.V4
 import Safe
+import System.IO (openTempFile, hClose)
+import System.Process (spawnCommand)
+import Text.Blaze.Html.Renderer.Utf8 (renderHtml)
 
 import qualified Lam
 import qualified Code
 import qualified CodeTree
 import qualified Diff
 import qualified DiffTree
+
+import qualified Html
 
 newtype CodeDbId = CodeDbId Text
   deriving (Ord, Eq, Show)
@@ -93,8 +98,17 @@ main = do
   v2projection <- runCodeDbIdGen $ codeTreeListProjection $ Lam.codeTree Code.v2
   printProjection v2projection
 
-  let diffResult = diffProjection initialDb v2projection
+  let (srcNode, diffResult) = diffProjection initialDb v2projection
   putStrLn $ T.pack $ show diffResult
+
+  let html = Html.mappingHtml srcNode diffResult
+  (filePath, handle) <- openTempFile "." ".html"
+  LB.hPut handle $ renderHtml html
+  hClose handle
+  putStrLn $ T.pack filePath
+  spawnCommand $ "open " ++ filePath
+  
+  
 
 projectionCodeDbIds :: ProjectionCode -> Set CodeDbId
 projectionCodeDbIds (ProjectionCode id _ children) = id `Set.insert` (Set.unions $ map projectionCodeDbIds children)
@@ -138,8 +152,10 @@ printProjection Projection{..} = mapM_ (printProjection' " ") projectionCode whe
     putStrLn $ codeDbIdText id `T.append` prefix `T.append` codeDbTypeText ty `T.append` " " `T.append` fromJustDef "" name
     forM_ children (printProjection' (prefix `T.append` "  "))
 
-diffProjection :: ([CodeDbId], CodeDb) -> Projection -> Diff.Mapping
-diffProjection codeDb projection = Diff.diff (codeDbDiffTree codeDb) (projectionDiffTree projection)
+diffProjection :: ([CodeDbId], CodeDb) -> Projection -> (DiffTree.SrcNode, Diff.Mapping)
+diffProjection codeDb projection = let srcDiffTree = codeDbDiffTree codeDb
+                                       mapping = Diff.diff (codeDbDiffTree codeDb) (projectionDiffTree projection)
+                                    in (DiffTree.SrcNode srcDiffTree, mapping)
 
 projectionDiffTree :: Projection -> DiffTree.DiffTree
 projectionDiffTree Projection{..} = DiffTree.DiffTree "M.Projection" "Module" Nothing $ map go projectionCode
