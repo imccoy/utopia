@@ -18,14 +18,14 @@ makeFields ''SrcNode
 makeFields ''DstNode
 
 newtype SrcNodeId = SrcNodeId Text
-  deriving (Eq)
+  deriving (Eq, Ord)
 
 instance Show SrcNodeId where
   show (SrcNodeId id) = T.unpack id
 
 
 newtype DstNodeId = DstNodeId Text
-  deriving (Eq)
+  deriving (Eq, Ord)
 
 instance Show DstNodeId where
   show (DstNodeId id) = T.unpack id

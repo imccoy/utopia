@@ -98,10 +98,10 @@ main = do
   v2projection <- runCodeDbIdGen $ codeTreeListProjection $ Lam.codeTree Code.v2
   printProjection v2projection
 
-  let (srcNode, diffResult) = diffProjection initialDb v2projection
+  let (reversedDiffResult, diffResult) = diffProjection initialDb v2projection
   putStrLn $ T.pack $ show diffResult
 
-  let html = Html.mappingHtml srcNode diffResult
+  let html = Html.mappingHtml reversedDiffResult diffResult
   (filePath, handle) <- openTempFile "." ".html"
   LB.hPut handle $ renderHtml html
   hClose handle
@@ -152,10 +152,10 @@ printProjection Projection{..} = mapM_ (printProjection' " ") projectionCode whe
     putStrLn $ codeDbIdText id `T.append` prefix `T.append` codeDbTypeText ty `T.append` " " `T.append` fromJustDef "" name
     forM_ children (printProjection' (prefix `T.append` "  "))
 
-diffProjection :: ([CodeDbId], CodeDb) -> Projection -> (DiffTree.SrcNode, Diff.Mapping)
+diffProjection :: ([CodeDbId], CodeDb) -> Projection -> (Diff.ReverseMapping, Diff.Mapping)
 diffProjection codeDb projection = let srcDiffTree = codeDbDiffTree codeDb
                                        mapping = Diff.diff (codeDbDiffTree codeDb) (projectionDiffTree projection)
-                                    in (DiffTree.SrcNode srcDiffTree, mapping)
+                                    in (Diff.reverseMapping mapping (DiffTree.SrcNode srcDiffTree), mapping)
 
 projectionDiffTree :: Projection -> DiffTree.DiffTree
 projectionDiffTree Projection{..} = DiffTree.DiffTree "M.Projection" "Module" Nothing $ map go projectionCode

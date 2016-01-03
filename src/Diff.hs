@@ -1,4 +1,4 @@
-module Diff (diff, DiffTree(..), Mapping, mappingDst, mappingSrc, mappingCost, mappingChildren) where
+module Diff (diff, DiffTree(..), Mapping, mappingDst, mappingSrc, mappingCost, mappingChildren, ReverseMapping, reverseMappingSrc, reverseMappingDsts, reverseMappingChildren, reverseMapping) where
 
 {-
  - The algorithm here is inspired by the gumtree paper and code:
@@ -25,6 +25,8 @@ module Diff (diff, DiffTree(..), Mapping, mappingDst, mappingSrc, mappingCost, m
 import Control.Lens
 import Data.List
 import Data.Text (Text)
+import Data.Map (Map)
+import qualified Data.Map as Map
 import Data.Maybe
 import Debug.Trace
 import Safe (fromJustDef)
@@ -86,3 +88,22 @@ matchTrees src = matchTrees'
                            in findMatchingNode dst dstChildMappings src
 
 diff src dst = matchTrees (SrcNode src) (DstNode dst)
+
+data ReverseMapping = ReverseMapping { _reverseMappingSrc :: SrcNode
+                                     , _reverseMappingDsts :: [DstNode]
+                                     , _reverseMappingChildren :: [ReverseMapping]
+                                     }
+makeLenses ''ReverseMapping
+
+reverseMapping :: Mapping -> SrcNode -> ReverseMapping
+reverseMapping mapping = go
+  where go :: SrcNode -> ReverseMapping
+        go srcNode = ReverseMapping srcNode 
+                                    (fromJustDef [] $ Map.lookup (srcNode ^. srcNodeId) dstNodes)
+                                    [go child | child <- srcNode ^. srcNodeChildren]
+        dstNodes :: Map SrcNodeId [DstNode]
+        dstNodes = Map.fromListWith (++) $ 
+                                    [ (src ^. srcNodeId, [m ^. mappingDst])
+                                    | m <- transitiveClosure (^. mappingChildren) mapping
+                                    , src <- maybeToList $ m ^. mappingSrc
+                                    ]

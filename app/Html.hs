@@ -7,12 +7,12 @@ import Control.Monad (forM_)
 import Text.Blaze.Html5
 import Text.Blaze.Html5.Attributes
 
-import Diff (Mapping, mappingDst, mappingSrc, mappingChildren)
+import Diff (Mapping, mappingDst, mappingSrc, mappingChildren, ReverseMapping, reverseMappingSrc, reverseMappingDsts, reverseMappingChildren)
 import DiffTree hiding (name, label)
 import qualified DiffTree
 
-mappingHtml :: SrcNode -> Mapping -> Html
-mappingHtml srcNode mapping = do
+mappingHtml :: ReverseMapping -> Mapping -> Html
+mappingHtml reverseMapping mapping = do
   docType
   head $ do
     link ! rel "stylesheet" ! href "styles.css"
@@ -20,18 +20,22 @@ mappingHtml srcNode mapping = do
   body $ do
     table $
       tr $ do
-        td ! width "50%" $ srcMapping srcNode
+        td ! width "50%" $ srcMapping reverseMapping
         td ! width "50%" $ dstMapping mapping
 
-srcMapping :: SrcNode -> Html
-srcMapping node = div ! class_ "src-node" $ do
+srcMapping :: ReverseMapping -> Html
+srcMapping reverseMapping = div ! class_ "src-node" $ do
   div ! class_ "src-node__label" $ do
-    a ! name (stringValue $ show $ node ^. srcNodeId) $ do
-      text $ node ^. diffTree . DiffTree.label
+    a ! name (stringValue $ show $ reverseMapping ^. reverseMappingSrc . srcNodeId) $ do
+      text $ reverseMapping ^. reverseMappingSrc . diffTree . DiffTree.label
       text " "
-      text $ node ^. diffTree . DiffTree.name . non ""
+      text $ reverseMapping ^. reverseMappingSrc . diffTree . DiffTree.name . non ""
+    forM_ (reverseMapping ^. reverseMappingDsts) $ \dst -> do
+      text " "
+      a ! href (stringValue $ "#" ++ (show $ dst ^. dstNodeId)) $ do
+        text "*"
   div ! class_ "src-node__children" $
-    forM_ (node ^. srcNodeChildren) srcMapping
+    forM_ (reverseMapping ^. reverseMappingChildren) srcMapping
 
 dstMapping :: Mapping -> Html
 dstMapping mapping = div ! class_ "dst-node" $ do
