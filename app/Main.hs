@@ -6,7 +6,7 @@ import Prelude hiding (putStrLn)
 
 import Control.Concurrent (threadDelay)
 import qualified Control.Exception as E
-import Control.Lens ((^.))
+import Control.Lens ((^.), to)
 import Control.Monad.Reader
 import qualified Control.Monad.State as State
 import qualified Data.ByteString.Lazy as LB
@@ -39,25 +39,21 @@ newtype CodeDbId = CodeDbId Text
   deriving (Ord, Eq, Show)
 codeDbIdText (CodeDbId id) = id
 
+dstNodeIdCodeDbId dstNodeId = CodeDbId (T.pack $ show dstNodeId)
+mappingCodeDbId = Diff.mappingDst . DiffTree.dstNodeId . to dstNodeIdCodeDbId
+
 newtype CodeDbType = CodeDbType Text
   deriving (Ord, Eq, Show)
 codeDbTypeText (CodeDbType ty) = ty
 
-data CodeDbTreeEntry = CodeDbTreeEntry CodeDbType [CodeDbId]
-type CodeDbTree = Map CodeDbId CodeDbTreeEntry
-data CodeDb = CodeDb { codeDbTree :: CodeDbTree, codeDbNames :: Map CodeDbId Text }
+data CodeDbGraphEntry = CodeDbGraphEntry CodeDbType [CodeDbId]
+type CodeDbGraph = Map CodeDbId CodeDbGraphEntry
+data CodeDb = CodeDb { codeDbGraph :: CodeDbGraph, codeDbNames :: Map CodeDbId Text }
 
 data ProjectionCode = ProjectionCode CodeDbId CodeDbType [ProjectionCode]
 projectionCodeId (ProjectionCode id _ _) = id
 
 data Projection = Projection { projectionCode :: [ProjectionCode], projectionNames :: Map CodeDbId Text }
-
-data SrcMapping = Delete | SrcChange CodeDbId | SrcMove CodeDbId
-  deriving (Show)
-data DstMapping = Add | DstChange CodeDbId | DstMove CodeDbId
-  deriving (Show)
-
-type Mappings = (Map CodeDbId SrcMapping, Map CodeDbId DstMapping)
 
 type CodeDbIdGen a = ReaderT Text IO a
 
@@ -133,17 +129,17 @@ initDb codeTree = codeTreeListProjection codeTree >>= return . initFromProjectio
 
 initFromProjection :: Projection -> ([CodeDbId], CodeDb)
 initFromProjection Projection{..} = (id, CodeDb tree projectionNames)
-  where (id, tree) = codeDbTreeFromProjectionCodeList projectionCode
+  where (id, tree) = codeDbGraphFromProjectionCodeList projectionCode
 
-codeDbTreeFromProjectionCodeList :: [ProjectionCode] -> ([CodeDbId], CodeDbTree)
-codeDbTreeFromProjectionCodeList projectionCodeList = (ids, Map.unions trees)
-  where (ids, trees) = unzip $ map codeDbTreeFromProjectionCode $ projectionCodeList
+codeDbGraphFromProjectionCodeList :: [ProjectionCode] -> ([CodeDbId], CodeDbGraph)
+codeDbGraphFromProjectionCodeList projectionCodeList = (ids, Map.unions trees)
+  where (ids, trees) = unzip $ map codeDbGraphFromProjectionCode $ projectionCodeList
 
-codeDbTreeFromProjectionCode :: ProjectionCode -> (CodeDbId, CodeDbTree)
-codeDbTreeFromProjectionCode (ProjectionCode id ty children) = (id, Map.insert id entry childrenCodeDbTree)
-  where (childrenCodeDbIds, childrenCodeDbTrees) = unzip $ map codeDbTreeFromProjectionCode children
-        childrenCodeDbTree = Map.unions childrenCodeDbTrees
-        entry = CodeDbTreeEntry ty childrenCodeDbIds
+codeDbGraphFromProjectionCode :: ProjectionCode -> (CodeDbId, CodeDbGraph)
+codeDbGraphFromProjectionCode (ProjectionCode id ty children) = (id, Map.insert id entry childrenCodeDbGraph)
+  where (childrenCodeDbIds, childrenCodeDbGraphs) = unzip $ map codeDbGraphFromProjectionCode children
+        childrenCodeDbGraph = Map.unions childrenCodeDbGraphs
+        entry = CodeDbGraphEntry ty childrenCodeDbIds
 
 printProjection :: Projection -> IO ()
 printProjection Projection{..} = mapM_ (printProjection' " ") projectionCode where
@@ -163,11 +159,24 @@ projectionDiffTree Projection{..} = DiffTree.DiffTree "M.Projection" "Module" No
 
 codeDbProjection :: ([CodeDbId], CodeDb) -> Projection
 codeDbProjection (codeDbIds, CodeDb{..}) = Projection (map project codeDbIds) codeDbNames
-  where project nodeId = let (CodeDbTreeEntry ty children) = fromJustNote "EEEK" $ Map.lookup nodeId codeDbTree
+  where project nodeId = let (CodeDbGraphEntry ty children) = fromJustNote "EEEK" $ Map.lookup nodeId codeDbGraph
                           in ProjectionCode nodeId ty $ map project children
 
 codeDbDiffTree :: ([CodeDbId], CodeDb) -> DiffTree.DiffTree
 codeDbDiffTree = projectionDiffTree . codeDbProjection 
 
---alterCodeDb :: Projection -> Mappings -> CodeDb -> CodeDb
---alterCodeDb Projection{..} (srcMappings, dstMappings) codeDb = 
+type ChangedNodeInUse = (CodeDbId, DiffTree.SrcNodeId, DiffTree.DstNodeId)
+type DeletedNodeInUse = (CodeDbId, DiffTree.SrcNodeId)
+
+alterCodeDbGraph :: [Diff.Mapping] -> CodeDbGraph -> CodeDbGraph
+alterCodeDbGraph [] codeDb = codeDb 
+alterCodeDbGraph (mapping:mappings) codeDb
+  | Map.member (mapping ^. mappingCodeDbId) codeDb = alterCodeDbGraph mappings codeDb
+  | otherwise = alterCodeDbGraph mappings
+                  $ Map.insert (mapping ^. mappingCodeDbId)
+                               (CodeDbGraphEntry (CodeDbType $ mapping ^. Diff.mappingDst . DiffTree.diffTree . DiffTree.label)
+                                                 [ child ^. mappingCodeDbId
+                                                 | child <- mapping ^. Diff.mappingChildren
+                                                 ])
+                  $ alterCodeDbGraph (mapping ^. Diff.mappingChildren)
+                  $ codeDb

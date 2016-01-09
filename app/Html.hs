@@ -30,7 +30,7 @@ srcMapping reverseMapping = div ! class_ "src-node" $ do
       text $ reverseMapping ^. reverseMappingSrc . diffTree . DiffTree.label
       text " "
       text $ reverseMapping ^. reverseMappingSrc . diffTree . DiffTree.name . non ""
-    forM_ (reverseMapping ^. reverseMappingDsts) $ \dst -> do
+    forM_ (reverseMapping ^. reverseMappingDsts) $ \(dst, cost) -> do
       text " "
       a ! href (stringValue $ "#" ++ (show $ dst ^. dstNodeId)) $ do
         text "*"

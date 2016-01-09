@@ -90,20 +90,18 @@ matchTrees src = matchTrees'
 diff src dst = matchTrees (SrcNode src) (DstNode dst)
 
 data ReverseMapping = ReverseMapping { _reverseMappingSrc :: SrcNode
-                                     , _reverseMappingDsts :: [DstNode]
+                                     , _reverseMappingDsts :: [(DstNode, Int)]
                                      , _reverseMappingChildren :: [ReverseMapping]
                                      }
 makeLenses ''ReverseMapping
 
 reverseMapping :: Mapping -> SrcNode -> ReverseMapping
 reverseMapping mapping = go
-  where go :: SrcNode -> ReverseMapping
-        go srcNode = ReverseMapping srcNode 
+  where go srcNode = ReverseMapping srcNode 
                                     (fromJustDef [] $ Map.lookup (srcNode ^. srcNodeId) dstNodes)
                                     [go child | child <- srcNode ^. srcNodeChildren]
-        dstNodes :: Map SrcNodeId [DstNode]
         dstNodes = Map.fromListWith (++) $ 
-                                    [ (src ^. srcNodeId, [m ^. mappingDst])
+                                    [ (src ^. srcNodeId, [(m ^. mappingDst, m ^. mappingCost)])
                                     | m <- transitiveClosure (^. mappingChildren) mapping
                                     , src <- maybeToList $ m ^. mappingSrc
                                     ]
