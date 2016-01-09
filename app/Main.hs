@@ -6,7 +6,7 @@ import Prelude hiding (putStrLn)
 
 import Control.Concurrent (threadDelay)
 import qualified Control.Exception as E
-import Control.Lens ((^.), to)
+import Control.Lens
 import Control.Monad.Reader
 import qualified Control.Monad.State as State
 import qualified Data.ByteString.Lazy as LB
@@ -22,33 +22,19 @@ import Data.Text.Lazy.Builder
 import qualified Data.UUID as UUID
 import qualified Data.UUID.V1
 import qualified Data.UUID.V4
-import Safe
+import Safe hiding (at)
 import System.IO (openTempFile, hClose)
 import System.Process (spawnCommand)
 import Text.Blaze.Html.Renderer.Utf8 (renderHtml)
 
 import qualified Lam
 import qualified Code
+import CodeDb
 import qualified CodeTree
 import qualified Diff
 import qualified DiffTree
 
 import qualified Html
-
-newtype CodeDbId = CodeDbId Text
-  deriving (Ord, Eq, Show)
-codeDbIdText (CodeDbId id) = id
-
-dstNodeIdCodeDbId dstNodeId = CodeDbId (T.pack $ show dstNodeId)
-mappingCodeDbId = Diff.mappingDst . DiffTree.dstNodeId . to dstNodeIdCodeDbId
-
-newtype CodeDbType = CodeDbType Text
-  deriving (Ord, Eq, Show)
-codeDbTypeText (CodeDbType ty) = ty
-
-data CodeDbGraphEntry = CodeDbGraphEntry CodeDbType [CodeDbId]
-type CodeDbGraph = Map CodeDbId CodeDbGraphEntry
-data CodeDb = CodeDb { codeDbGraph :: CodeDbGraph, codeDbNames :: Map CodeDbId Text }
 
 data ProjectionCode = ProjectionCode CodeDbId CodeDbType [ProjectionCode]
 projectionCodeId (ProjectionCode id _ _) = id
@@ -158,8 +144,8 @@ projectionDiffTree Projection{..} = DiffTree.DiffTree "M.Projection" "Module" No
   where go (ProjectionCode id ty children) = DiffTree.DiffTree (codeDbIdText id) (codeDbTypeText ty) (Map.lookup id projectionNames) (map go children)
 
 codeDbProjection :: ([CodeDbId], CodeDb) -> Projection
-codeDbProjection (codeDbIds, CodeDb{..}) = Projection (map project codeDbIds) codeDbNames
-  where project nodeId = let (CodeDbGraphEntry ty children) = fromJustNote "EEEK" $ Map.lookup nodeId codeDbGraph
+codeDbProjection (codeDbIds, codeDb) = Projection (map project codeDbIds) (codeDb ^. codeDbNames)
+  where project nodeId = let (CodeDbGraphEntry ty children) = fromJustNote "EEEK" $ Map.lookup nodeId (codeDb ^. codeDbGraph)
                           in ProjectionCode nodeId ty $ map project children
 
 codeDbDiffTree :: ([CodeDbId], CodeDb) -> DiffTree.DiffTree
@@ -168,15 +154,15 @@ codeDbDiffTree = projectionDiffTree . codeDbProjection
 type ChangedNodeInUse = (CodeDbId, DiffTree.SrcNodeId, DiffTree.DstNodeId)
 type DeletedNodeInUse = (CodeDbId, DiffTree.SrcNodeId)
 
-alterCodeDbGraph :: [Diff.Mapping] -> CodeDbGraph -> CodeDbGraph
+alterCodeDbGraph :: [Diff.Mapping] -> CodeDb -> CodeDb
 alterCodeDbGraph [] codeDb = codeDb 
 alterCodeDbGraph (mapping:mappings) codeDb
-  | Map.member (mapping ^. mappingCodeDbId) codeDb = alterCodeDbGraph mappings codeDb
+  | Map.member (mapping ^. mappingCodeDbId) (codeDb ^. codeDbGraph) = alterCodeDbGraph mappings codeDb
   | otherwise = alterCodeDbGraph mappings
-                  $ Map.insert (mapping ^. mappingCodeDbId)
-                               (CodeDbGraphEntry (CodeDbType $ mapping ^. Diff.mappingDst . DiffTree.diffTree . DiffTree.label)
-                                                 [ child ^. mappingCodeDbId
-                                                 | child <- mapping ^. Diff.mappingChildren
-                                                 ])
                   $ alterCodeDbGraph (mapping ^. Diff.mappingChildren)
+                  $ set (codeDbGraph . at (mapping ^. mappingCodeDbId)) (Just newGraphEntry)
                   $ codeDb
+  where newGraphEntry = CodeDbGraphEntry (CodeDbType $ mapping ^. Diff.mappingDst . DiffTree.diffTree . DiffTree.label)
+                                         [ child ^. mappingCodeDbId
+                                         | child <- mapping ^. Diff.mappingChildren
+                                         ]
