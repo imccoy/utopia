@@ -14,8 +14,10 @@ cabal-version:       >=1.10
 
 library
   hs-source-dirs:      src
-  exposed-modules:     Lam, Code, CodeDb, CodeTree, Diff, DiffTree
-  default-extensions:  FunctionalDependencies,
+  exposed-modules:     Code, CodeDb, CodeTree, Diff, DiffTree, Id, Lam
+  default-extensions:  DeriveFunctor,
+                       FunctionalDependencies,
+                       LambdaCase,
                        MultiParamTypeClasses,
                        NamedFieldPuns,
                        OverloadedStrings,
@@ -26,8 +28,10 @@ library
                        containers,
                        edit-distance,
                        lens,
+                       recursion-schemes,
                        safe,
-                       text
+                       text,
+                       transformers
 
 test-suite test
   default-language: Haskell2010

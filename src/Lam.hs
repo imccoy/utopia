@@ -1,57 +1,74 @@
+{-# LANGUAGE DeriveTraversable, ScopedTypeVariables #-}
 module Lam where
 
+import Control.Monad
+import Data.Functor.Identity
+import Data.Functor.Foldable
 import qualified Data.Text as T
 
 import CodeTree
+import DiffTree
+import qualified Id
 
 type Name = T.Text
 
-data Module = Module [Binding]
-
-data Binding = Binding Name Exp
-
 data Literal = Number Int | Text T.Text
+  deriving (Show)
 
-data Exp = Lam [Name] Exp | Var Name | App Exp [Exp] | Lit Literal
+data ExpF e = LamF [Name] e
+            | AppF e [e]
+            | VarF Name
+            | LitF Literal
+  deriving (Functor, Prelude.Foldable, Show, Traversable)
 
-codeTree :: Module -> [CodeTree]
-codeTree (Module bindings)
-  = [bindingCodeTree binding | binding <- bindings]
+data Binding e = Binding Name e
+  deriving (Functor, Show)
 
-bindingCodeTree (Binding name exp)
-  = CodeTree "Binding" (Just name)
-             [expCodeTree exp]
+type Exp = Fix ExpF
 
-expCodeTree = go
-  where go (Lam args body) = CodeTree "Lam" Nothing
-                                      [lamArgsCodeTree args
-                                      ,lamBodyCodeTree body
-                                      ]
-        go (Var name) = CodeTree "Var" (Just name)
-                                 []
-        go (App f args) = CodeTree "App" Nothing
-                                   [appFunCodeTree f
-                                   ,appArgsCodeTree args
-                                   ]
-        go (Lit ((Number n))) = CodeTree "LitNumber" (Just (T.pack $ show n))
-                                         []
-        go (Lit ((Text t))) = CodeTree "LitText" (Just t)
-                                       []
+lam args body = Fix (LamF args body)
+app f args = Fix (AppF f args)
+var name = Fix (VarF name)
+lit literal = Fix (LitF literal)
 
-lamArgsCodeTree args = CodeTree "LamArgs" Nothing
-                                [CodeTree "LamArg" (Just arg)
-                                          []
-                                |arg <- args
-                                ]
+type ExpWithId i = Id.WithIdR i ExpF
+type BindingWithId i = Id.WithId i (Binding (ExpWithId i))
 
-lamBodyCodeTree body = CodeTree "LamBody" Nothing
-                                [expCodeTree body]
+bindingWithId :: (Monad m) => m i -> Binding Exp -> m (BindingWithId i)
+bindingWithId gen (Binding name exp) = do
+  (bindingId :: i) <- gen
+  (expWithIds :: ExpWithId i) <- Id.withIdM gen exp
+  pure $ Id.WithId bindingId (Binding name expWithIds)
 
-appFunCodeTree fun = CodeTree "AppFun" Nothing
-                              [expCodeTree fun]
+mapBindingId :: (i1 -> i2) -> BindingWithId i1 -> BindingWithId i2
+mapBindingId f (Id.WithId i (Binding n v)) = Id.WithId (f i) $ Binding n (Id.mapIds f v)
 
-appArgsCodeTree args = CodeTree "AppArgs" Nothing
-                                [CodeTree "AppArg" Nothing
-                                          [expCodeTree arg]
-                                | arg <- args
-                                ]
+bindingDiffTree :: BindingWithId T.Text -> DiffTree
+bindingDiffTree (Id.WithId id (Binding name exp)) = DiffTree id "Binding" (Just name) [expDiffTree exp]
+
+expDiffTree :: ExpWithId T.Text -> DiffTree
+expDiffTree = cata $ \(Id.WithIdF (Id.WithId i v)) -> case v of
+  LamF args body  -> DiffTree i "Lam" Nothing $
+                                      [DiffTree (argId i n)
+                                                 "LamArg"
+                                                 (Just arg) 
+                                                 []
+                                      | (n, arg) <- zip [0..] args
+                                      ] ++ [body]
+  VarF name       -> DiffTree i "Var" (Just name) []
+  AppF f args     -> DiffTree i "App" Nothing $
+                                      f:[wrap (argId i n)
+                                              "AppArg"
+                                              [arg]
+                                        | (n, arg) <- zip [0..] args
+                                        ]
+  LitF (Number n) -> DiffTree i "LitNumber" (Just (T.pack $ show n)) []
+  LitF (Text t)   -> DiffTree i "LitText" (Just t) []
+
+argsId :: T.Text -> T.Text
+argsId id = id `T.append` ".Args"
+
+argId :: T.Text -> Int -> T.Text
+argId id n = argsId id `T.append` ".Args[" `T.append` T.pack (show n) `T.append` "]"
+
+wrap i name exps = DiffTree i name Nothing exps

@@ -27,12 +27,12 @@ import System.IO (openTempFile, hClose)
 import System.Process (spawnCommand)
 import Text.Blaze.Html.Renderer.Utf8 (renderHtml)
 
-import qualified Lam
 import qualified Code
 import CodeDb
-import qualified CodeTree
 import qualified Diff
 import qualified DiffTree
+import qualified Id
+import qualified Lam
 
 import qualified Html
 
@@ -60,24 +60,12 @@ nextCodeDbId = do
   tailUUID <- liftIO Data.UUID.V4.nextRandom
   return $ CodeDbId $ baseUUID `T.append` "-" `T.append` UUID.toText tailUUID
 
-withIds :: CodeTree.CodeTree -> CodeDbIdGen DiffTree.DiffTree
-withIds codeTree = do
-  id <- nextCodeDbId
-  children <- mapM withIds (codeTree ^. CodeTree.children)
-  pure $ DiffTree.DiffTree (codeDbIdText id) (codeTree ^. CodeTree.label) (codeTree ^. CodeTree.name) children
-
 main = do
-  let v1 = DiffTree.humanReadableIds $ Lam.codeTree Code.v1
-  let v2 = DiffTree.humanReadableIds $ Lam.codeTree Code.v2
-  let diffResult = Diff.diff (DiffTree.DiffTree "M1" "Module" Nothing v1)
-                             (DiffTree.DiffTree "M2" "Module" Nothing v2)
-  putStrLn $ T.pack $ show diffResult
-
-  v1projection <- runCodeDbIdGen $ codeTreeListProjection $ Lam.codeTree Code.v1
+  v1projection <- runCodeDbIdGen $ bindingListProjection Code.v1
   let initialDb = initFromProjection v1projection
   printProjection v1projection
 
-  v2projection <- runCodeDbIdGen $ codeTreeListProjection $ Lam.codeTree Code.v2
+  v2projection <- runCodeDbIdGen $ bindingListProjection Code.v2
   printProjection v2projection
 
   let (reversedDiffResult, diffResult) = diffProjection initialDb v2projection
@@ -95,23 +83,19 @@ main = do
 projectionCodeDbIds :: ProjectionCode -> Set CodeDbId
 projectionCodeDbIds (ProjectionCode id _ children) = id `Set.insert` (Set.unions $ map projectionCodeDbIds children)
 
-codeTreeListProjection :: [CodeTree.CodeTree] -> CodeDbIdGen Projection
-codeTreeListProjection codeTrees = do
-  (projectionsCode, projectionsNames) <- mapM codeTreeProjection codeTrees >>= return . unzip
+bindingListProjection :: [Lam.Binding Lam.Exp] -> CodeDbIdGen Projection
+bindingListProjection bindings = do
+  (projectionsCode, projectionsNames) <- unzip <$> mapM (Lam.bindingWithId nextCodeDbId >=> pure . diffTreeProjection . Lam.bindingDiffTree . Lam.mapBindingId codeDbIdText) bindings
   return $ Projection projectionsCode (Map.unions projectionsNames)
 
-codeTreeProjection :: CodeTree.CodeTree -> CodeDbIdGen (ProjectionCode, Map CodeDbId Text)
-codeTreeProjection (CodeTree.CodeTree label name children) = do
-  id <- nextCodeDbId
-  (childrenProjectionCode, childNameMaps) <- mapM codeTreeProjection children >>= return . unzip
-  let projectionCode = ProjectionCode id (CodeDbType label) childrenProjectionCode
+diffTreeProjection :: DiffTree.DiffTree -> (ProjectionCode, Map CodeDbId Text)
+diffTreeProjection (DiffTree.DiffTree id label name children) = 
+  let (childrenProjectionCode, childNameMaps) = unzip $ map diffTreeProjection children
+      projectionCode = ProjectionCode (CodeDbId id) (CodeDbType label) childrenProjectionCode
 
-  let childNamesMap = Map.unions childNameMaps
-  let projectionNames = maybe childNamesMap (\name -> Map.insert id name childNamesMap) name
-  return (projectionCode, projectionNames)
-
-initDb :: [CodeTree.CodeTree] -> CodeDbIdGen ([CodeDbId], CodeDb)
-initDb codeTree = codeTreeListProjection codeTree >>= return . initFromProjection
+      childNamesMap = Map.unions childNameMaps
+      projectionNames = maybe childNamesMap (\name -> Map.insert (CodeDbId id) name childNamesMap) name
+   in (projectionCode, projectionNames)
 
 initFromProjection :: Projection -> ([CodeDbId], CodeDb)
 initFromProjection Projection{..} = (id, CodeDb tree projectionNames)
@@ -151,17 +135,14 @@ codeDbProjection (codeDbIds, codeDb) = Projection (map project codeDbIds) (codeD
 codeDbDiffTree :: ([CodeDbId], CodeDb) -> DiffTree.DiffTree
 codeDbDiffTree = projectionDiffTree . codeDbProjection 
 
-type ChangedNodeInUse = (CodeDbId, DiffTree.SrcNodeId, DiffTree.DstNodeId)
-type DeletedNodeInUse = (CodeDbId, DiffTree.SrcNodeId)
-
-alterCodeDbGraph :: [Diff.Mapping] -> CodeDb -> CodeDb
-alterCodeDbGraph [] codeDb = codeDb 
-alterCodeDbGraph (mapping:mappings) codeDb
-  | Map.member (mapping ^. mappingCodeDbId) (codeDb ^. codeDbGraph) = alterCodeDbGraph mappings codeDb
-  | otherwise = alterCodeDbGraph mappings
-                  $ alterCodeDbGraph (mapping ^. Diff.mappingChildren)
-                  $ set (codeDbGraph . at (mapping ^. mappingCodeDbId)) (Just newGraphEntry)
-                  $ codeDb
+mappedCodeDb :: [Diff.Mapping] -> CodeDb -> CodeDb
+mappedCodeDb [] = \codeDb -> codeDb
+mappedCodeDb (mapping:mappings)
+  | (mapping ^. Diff.mappingCost) == 0 = mappedCodeDb mappings
+  | otherwise = mappedCodeDb mappings
+                  . mappedCodeDb (mapping ^. Diff.mappingChildren)
+                  . set (codeDbGraph . at (mapping ^. mappingCodeDbId)) (Just newGraphEntry)
+                  . set (codeDbNames . at (mapping ^. mappingCodeDbId)) (mapping ^. Diff.mappingDst . DiffTree.diffTree . DiffTree.name)
   where newGraphEntry = CodeDbGraphEntry (CodeDbType $ mapping ^. Diff.mappingDst . DiffTree.diffTree . DiffTree.label)
                                          [ child ^. mappingCodeDbId
                                          | child <- mapping ^. Diff.mappingChildren
