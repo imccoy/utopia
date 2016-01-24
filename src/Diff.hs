@@ -22,13 +22,11 @@ module Diff (diff, DiffTree(..), Mapping, mappingDst, mappingSrc, mappingCost, m
  -   * favour using each node exactly once?
  -}
 
-import Control.Lens
+import Control.Lens hiding (children)
 import Data.List
 import Data.Text (Text)
-import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Maybe
-import Debug.Trace
 import Safe (fromJustDef)
 
 import Text.EditDistance
@@ -51,27 +49,31 @@ instance Show Mapping where
 transitiveClosure :: (a -> [a]) -> a -> [a]
 transitiveClosure f v = v:(concat [transitiveClosure f c | c <- f v])
 
-renameCost :: Text -> Maybe Text -> Text -> Maybe Text -> Maybe Int
-renameCost srcLabel (Just srcName) dstLabel (Just dstName)
-  | srcLabel == dstLabel = Just $ levenshteinDistance defaultEditCosts (show srcName) (show dstName)
-  | otherwise            = Nothing
-renameCost srcLabel Nothing dstLabel Nothing
-  | srcLabel == dstLabel = Just 0
-  | otherwise            = Nothing
-renameCost _ _ _ _       = Nothing
+renameCostFor :: Text -> Maybe Text -> Text -> Maybe Text -> Maybe Int
+renameCostFor srcLabel (Just srcName) dstLabel (Just dstName)
+  | srcLabel == dstLabel    = Just $ levenshteinDistance defaultEditCosts (show srcName) (show dstName)
+  | otherwise               = Nothing
+renameCostFor srcLabel Nothing dstLabel Nothing
+  | srcLabel == dstLabel    = Just 0
+  | otherwise               = Nothing
+renameCostFor _ _ _ _       = Nothing
 
 -- I totally just made these numbers up
+childInDstNotMappedCost :: Int
 childInDstNotMappedCost = 10
+childInSrcNotHereCost :: Int
 childInSrcNotHereCost = 5
+inventedNodeCost :: Int
 inventedNodeCost = 100 
 
 scoreMapping :: Mapping -> Int
-scoreMapping (Mapping dst src renameCost childMappings) = numUnmappedChildren * childInDstNotMappedCost + numDroppedSrcChildren * childInSrcNotHereCost + renameCost
+scoreMapping (Mapping _ src renameCost childMappings) = numUnmappedChildren * childInDstNotMappedCost + numDroppedSrcChildren * childInSrcNotHereCost + renameCost
   where numUnmappedChildren = length $ filter (isNothing . _mappingSrc) childMappings
         numDroppedSrcChildren = let srcChildIds = map (^. srcNodeId) (src ^. _Just . srcNodeChildren)
                                     childMappingSrcIds = map (^. srcNodeId) $ catMaybes $ map (^. mappingSrc) childMappings
                                  in length $ srcChildIds \\ childMappingSrcIds
 
+compareMappings :: Mapping -> Mapping -> Ordering
 compareMappings a b = compare (scoreMapping a) (scoreMapping b)
 
 findMatchingNode :: DstNode -> [Mapping] -> SrcNode -> Mapping
@@ -80,13 +82,14 @@ findMatchingNode dst dstChildMappings = findMatchingNode'
                                   [] -> Mapping dst Nothing inventedNodeCost dstChildMappings
                                   mappings -> minimumBy compareMappings mappings
         possibleMappings src = catMaybes [ mappingTo srcNode | srcNode <- transitiveClosure (^. srcNodeChildren) src]
-        mappingTo src = Mapping dst (Just src) <$> renameCost (src ^. diffTree . label) (src ^. diffTree . name) (dst ^. diffTree . label) (dst ^. diffTree . name) <*> pure dstChildMappings
+        mappingTo src = Mapping dst (Just src) <$> renameCostFor (src ^. diffTree . label) (src ^. diffTree . name) (dst ^. diffTree . label) (dst ^. diffTree . name) <*> pure dstChildMappings
 
 matchTrees :: SrcNode -> DstNode -> Mapping
 matchTrees src = matchTrees'
   where matchTrees' dst = let dstChildMappings = map (matchTrees src) (dst ^. dstNodeChildren)
                            in findMatchingNode dst dstChildMappings src
 
+diff :: DiffTree -> DiffTree -> Mapping
 diff src dst = matchTrees (SrcNode src) (DstNode dst)
 
 data ReverseMapping = ReverseMapping { _reverseMappingSrc :: SrcNode
@@ -96,12 +99,12 @@ data ReverseMapping = ReverseMapping { _reverseMappingSrc :: SrcNode
 makeLenses ''ReverseMapping
 
 reverseMapping :: Mapping -> SrcNode -> ReverseMapping
-reverseMapping mapping = go
+reverseMapping unreversed = go
   where go srcNode = ReverseMapping srcNode 
                                     (fromJustDef [] $ Map.lookup (srcNode ^. srcNodeId) dstNodes)
                                     [go child | child <- srcNode ^. srcNodeChildren]
         dstNodes = Map.fromListWith (++) $ 
                                     [ (src ^. srcNodeId, [(m ^. mappingDst, m ^. mappingCost)])
-                                    | m <- transitiveClosure (^. mappingChildren) mapping
+                                    | m <- transitiveClosure (^. mappingChildren) unreversed
                                     , src <- maybeToList $ m ^. mappingSrc
                                     ]

@@ -1,5 +1,7 @@
 module DiffTree (DiffTree(..), label, name, SrcNode(..), DstNode(..), diffTree, SrcNodeId, DstNodeId, srcNodeId, dstNodeId, srcNodeChildren, dstNodeChildren, humanReadableIds) where
 
+import Prelude hiding (id)
+
 import Control.Lens
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -45,13 +47,13 @@ dstNodeChildren = diffTree . diffTreeChildren . (to (map DstNode))
 
 humanReadableIds :: [CodeTree] -> [DiffTree]
 humanReadableIds nodes = [ go (T.pack $ show n) node
-                         | (n, node) <- zip [0..] nodes
+                         | (n, node) <- zip ([(0 :: Int)..]) nodes
                          ]
   where go prefix codeTree = let id = prefix `T.append` "." `T.append` (codeTree ^. CodeTree.label)
                               in DiffTree id
                                           (codeTree ^. CodeTree.label)
                                           (codeTree ^. CodeTree.name)
                                           [ go (T.concat [id, "[", T.pack (show n), "]"]) child
-                                          | (n, child) <- zip [0..] (codeTree ^. CodeTree.children)
+                                          | (n, child) <- zip [(0 :: Int)..] (codeTree ^. CodeTree.children)
                                           ]
- 
+

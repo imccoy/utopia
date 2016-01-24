@@ -2,7 +2,7 @@
 
 module Id where
 
-import Prelude hiding (Foldable)
+import Prelude hiding (Foldable, id)
 
 import Control.Monad
 import Data.Functor.Foldable
@@ -14,6 +14,7 @@ data WithIdF i v f = WithIdF (WithId i (v f))
   deriving (Show, Functor)
 type WithIdR i v = Fix (WithIdF i v)
 
+withIdR :: i -> v (Fix (WithIdF i v)) -> Fix (WithIdF i v)
 withIdR i v = Fix (WithIdF (WithId i v))
 
 -- from https://github.com/ekmett/recursion-schemes/issues/3

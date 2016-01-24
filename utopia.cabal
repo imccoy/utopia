@@ -32,27 +32,29 @@ library
                        safe,
                        text,
                        transformers
+  ghc-options:         -Wall
 
 test-suite test
-  default-language: Haskell2010
-  type: exitcode-stdio-1.0
-  hs-source-dirs: tests
-  main-is: test.hs
+  default-language:    Haskell2010
+  type:                exitcode-stdio-1.0
+  hs-source-dirs:      tests
+  main-is:             test.hs
   default-extensions:  NamedFieldPuns,
                        OverloadedStrings,
                        RankNTypes,
                        RecordWildCards
-  build-depends: base,
-                 lens,
-                 tasty,
-                 tasty-hunit,
-                 text,
-                 utopia
+  build-depends:       base,
+                       lens,
+                       tasty,
+                       tasty-hunit,
+                       text,
+                       utopia
+  ghc-options:         -Wall
 
 executable utopia
   hs-source-dirs:      app
   main-is:             Main.hs
-  -- other-modules:       
+  other-modules:       Html
   default-extensions:  NamedFieldPuns,
                        OverloadedStrings,
                        RecordWildCards
@@ -68,3 +70,4 @@ executable utopia
                        utopia,
                        uuid
   default-language:    Haskell2010
+  ghc-options:         -Wall

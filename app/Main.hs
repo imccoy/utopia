@@ -1,24 +1,17 @@
 module Main where
 
-import Debug.Trace
+import Prelude hiding (id, putStrLn)
 
-import Prelude hiding (putStrLn)
-
-import Control.Concurrent (threadDelay)
-import qualified Control.Exception as E
-import Control.Lens
+import Control.Lens hiding (children, mapping)
 import Control.Monad.Reader
-import qualified Control.Monad.State as State
 import qualified Data.ByteString.Lazy as LB
 import Data.Map (Map)
 import qualified Data.Map as Map
-import Data.Monoid
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Text.IO
-import Data.Text.Lazy.Builder
 import qualified Data.UUID as UUID
 import qualified Data.UUID.V1
 import qualified Data.UUID.V4
@@ -31,22 +24,24 @@ import qualified Code
 import CodeDb
 import qualified Diff
 import qualified DiffTree
-import qualified Id
 import qualified Lam
 
 import qualified Html
 
 data ProjectionCode = ProjectionCode CodeDbId CodeDbType [ProjectionCode]
+projectionCodeId :: ProjectionCode -> CodeDbId
 projectionCodeId (ProjectionCode id _ _) = id
 
 data Projection = Projection { projectionCode :: [ProjectionCode], projectionNames :: Map CodeDbId Text }
 
 type CodeDbIdGen a = ReaderT Text IO a
 
+runCodeDbIdGen :: CodeDbIdGen a -> IO a
 runCodeDbIdGen f = do
   baseUUID <- getBaseUUID
   runReaderT f (UUID.toText baseUUID)
 
+getBaseUUID :: IO UUID.UUID
 getBaseUUID = do
   baseUUID <- Data.UUID.V1.nextUUID
   case baseUUID of
@@ -60,6 +55,7 @@ nextCodeDbId = do
   tailUUID <- liftIO Data.UUID.V4.nextRandom
   return $ CodeDbId $ baseUUID `T.append` "-" `T.append` UUID.toText tailUUID
 
+main :: IO ()
 main = do
   v1projection <- runCodeDbIdGen $ bindingListProjection Code.v1
   let initialDb = initFromProjection v1projection
@@ -76,9 +72,9 @@ main = do
   LB.hPut handle $ renderHtml html
   hClose handle
   putStrLn $ T.pack filePath
-  spawnCommand $ "open " ++ filePath
-  
-  
+  void $ spawnCommand $ "open " ++ filePath
+  return ()
+
 
 projectionCodeDbIds :: ProjectionCode -> Set CodeDbId
 projectionCodeDbIds (ProjectionCode id _ children) = id `Set.insert` (Set.unions $ map projectionCodeDbIds children)
@@ -94,7 +90,7 @@ diffTreeProjection (DiffTree.DiffTree id label name children) =
       projectionCode = ProjectionCode (CodeDbId id) (CodeDbType label) childrenProjectionCode
 
       childNamesMap = Map.unions childNameMaps
-      projectionNames = maybe childNamesMap (\name -> Map.insert (CodeDbId id) name childNamesMap) name
+      projectionNames = maybe childNamesMap (\childName -> Map.insert (CodeDbId id) childName childNamesMap) name
    in (projectionCode, projectionNames)
 
 initFromProjection :: Projection -> ([CodeDbId], CodeDb)

@@ -1,13 +1,12 @@
 {-# LANGUAGE DeriveTraversable, ScopedTypeVariables #-}
 module Lam where
 
-import Control.Monad
-import Data.Functor.Identity
+import Prelude hiding (exp, id)
+
 import Data.Functor.Foldable
 import qualified Data.Text as T
 
-import CodeTree
-import DiffTree
+import DiffTree (DiffTree(..))
 import qualified Id
 
 type Name = T.Text
@@ -26,9 +25,16 @@ data Binding e = Binding Name e
 
 type Exp = Fix ExpF
 
+lam :: [T.Text] -> Exp -> Exp
 lam args body = Fix (LamF args body)
+
+app :: Exp -> [Exp] -> Exp
 app f args = Fix (AppF f args)
+
+var :: T.Text -> Exp
 var name = Fix (VarF name)
+
+lit :: Literal -> Exp
 lit literal = Fix (LitF literal)
 
 type ExpWithId i = Id.WithIdR i ExpF
@@ -71,4 +77,5 @@ argsId id = id `T.append` ".Args"
 argId :: T.Text -> Int -> T.Text
 argId id n = argsId id `T.append` ".Args[" `T.append` T.pack (show n) `T.append` "]"
 
+wrap :: T.Text -> T.Text -> [DiffTree] -> DiffTree
 wrap i name exps = DiffTree i name Nothing exps

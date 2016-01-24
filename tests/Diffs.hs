@@ -1,18 +1,19 @@
 module Diffs where
 
-import Control.Lens
+import Control.Lens hiding (mapping)
 import qualified Data.Text as T
 
 import Test.Tasty
 import Test.Tasty.HUnit
 
 import DiffTree hiding (diffTree)
-import Diff (Mapping, mappingDst, mappingSrc, mappingCost, mappingChildren)
+import Diff (Mapping, mappingDst, mappingSrc, mappingChildren)
 import qualified Diff
-import Lam
 
+mappingChild :: Int -> Traversal' Mapping Mapping
 mappingChild n = mappingChildren . ix n
 
+mappingAt :: [Int] -> Traversal' Mapping Mapping
 mappingAt [] = id
 mappingAt (n:ns) = mappingChild n . mappingAt ns
 
