@@ -3,7 +3,12 @@ module Lam where
 
 import Prelude hiding (exp, id)
 
+import Data.Foldable (fold)
 import Data.Functor.Foldable
+import Data.Map (Map)
+import qualified Data.Map as Map
+import Data.Set (Set)
+import qualified Data.Set as Set
 import qualified Data.Text as T
 
 import DiffTree (DiffTree(..))
@@ -49,11 +54,43 @@ bindingWithId gen (Binding name exp) = do
 mapBindingId :: (i1 -> i2) -> BindingWithId i1 -> BindingWithId i2
 mapBindingId f (Id.WithId i (Binding n v)) = Id.WithId (f i) $ Binding n (Id.mapIds f v)
 
-bindingDiffTree :: BindingWithId T.Text -> DiffTree
-bindingDiffTree (Id.WithId id (Binding name exp)) = DiffTree id "Binding" (Just name) [expDiffTree exp]
+newtype MonoidMap k v = MonoidMap (Map k v)
+unMonoidMap (MonoidMap m) = m
 
-expDiffTree :: ExpWithId T.Text -> DiffTree
-expDiffTree = cata $ \(Id.WithIdF (Id.WithId i v)) -> case v of
+instance (Ord k, Monoid v) => Monoid (MonoidMap k v) where
+  mempty = MonoidMap Map.empty
+  mappend (MonoidMap a) (MonoidMap b) = MonoidMap (Map.unionWith mappend a b)
+
+type Env i = Map i (Maybe i)
+
+resolveVars :: (Ord i) => [BindingWithId i] -> Env i
+resolveVars bindings = (Just <$> boundInExprs) `mappend` mconcat [ let maybeId = Map.lookup name topLevelBindings
+                                                                    in Map.fromList $ (, maybeId) <$> Set.toList varIds
+                                                                 | (name, varIds) <- Map.assocs $ unMonoidMap unboundInExprs]
+  where (topLevelBindingList, topLevelBindingExpList) = unzip [((name, i), exp) | (Id.WithId i (Binding name exp)) <- bindings]
+        topLevelBindings = Map.fromList topLevelBindingList
+        (unboundInExprs, boundInExprs) = mconcat (resolveExpVars <$> topLevelBindingExpList)
+
+resolveExpVars :: (Ord i) => ExpWithId i -> (MonoidMap Name (Set i), Map i i)
+resolveExpVars = 
+  cata $ \(Id.WithIdF (Id.WithId i v)) ->
+    case v of
+      VarF name -> (MonoidMap $ Map.singleton name (Set.singleton i), Map.empty)
+      LamF names exp -> foldr bindName exp names
+        where bindName name (unbound, bound) = case Map.lookup name $ unMonoidMap unbound of
+                                                 Just varIds -> (MonoidMap (Map.delete name (unMonoidMap unbound)), foldr (\varId -> Map.insert varId i) bound varIds)
+                                                 Nothing -> (unbound, bound)
+      _ -> Data.Foldable.fold v
+
+bindingDiffTree :: Env T.Text -> BindingWithId T.Text -> DiffTree
+bindingDiffTree env (Id.WithId id (Binding name exp)) = DiffTree id "Binding" (Just name) [expDiffTree env exp]
+
+bindingDiffTrees :: [BindingWithId T.Text] -> [DiffTree]
+bindingDiffTrees bindings = fmap (bindingDiffTree env) bindings
+  where env = resolveVars bindings
+
+expDiffTree :: Env T.Text -> ExpWithId T.Text -> DiffTree
+expDiffTree env = cata $ \(Id.WithIdF (Id.WithId i v)) -> case v of
   LamF args body  -> DiffTree i "Lam" Nothing $
                                       [DiffTree (argId i n)
                                                  "LamArg"
@@ -61,7 +98,12 @@ expDiffTree = cata $ \(Id.WithIdF (Id.WithId i v)) -> case v of
                                                  []
                                       | (n, arg) <- zip [0..] args
                                       ] ++ [body]
-  VarF name       -> DiffTree i "Var" (Just name) []
+  VarF name       -> DiffTree i "Var" (Just name) 
+                                      [DiffTree (i `T.append` ".Ref")
+                                                "METADATA-REF"
+                                                (Data.Foldable.fold $ Map.lookup i env)
+                                                []
+                                      ]
   AppF f args     -> DiffTree i "App" Nothing $
                                       f:[wrap (argId i n)
                                               "AppArg"

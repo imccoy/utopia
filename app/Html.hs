@@ -4,6 +4,7 @@ import Prelude hiding (head, div)
 
 import Control.Lens hiding (children, mapping)
 import Control.Monad (forM_)
+import qualified Data.Text as T
 import Text.Blaze.Html5
 import Text.Blaze.Html5.Attributes
 
@@ -24,28 +25,37 @@ mappingHtml reverseMapping mapping = do
         td ! width "50%" $ dstMapping mapping
 
 srcMapping :: ReverseMapping -> Html
-srcMapping reverseMapping = div ! class_ "src-node" $ do
-  div ! class_ "src-node__label" $ do
-    a ! name (stringValue $ show $ reverseMapping ^. reverseMappingSrc . srcNodeId) $ do
-      text $ reverseMapping ^. reverseMappingSrc . diffTree . DiffTree.label
-      text " "
-      text $ reverseMapping ^. reverseMappingSrc . diffTree . DiffTree.name . non ""
-    forM_ (reverseMapping ^. reverseMappingDsts) $ \(dst, _cost) -> do
-      text " "
-      a ! href (stringValue $ "#" ++ (show $ dst ^. dstNodeId)) $ do
-        text "*"
-  div ! class_ "src-node__children" $
-    forM_ (reverseMapping ^. reverseMappingChildren) srcMapping
+srcMapping reverseMapping =
+  let label = reverseMapping ^. reverseMappingSrc . diffTree . DiffTree.label
+      diffTreeName = reverseMapping ^. reverseMappingSrc . diffTree . DiffTree.name . non ""
+   in div ! class_ "src-node" $ do
+     if label == "METADATA-REF"
+        then a ! href (textValue $ "#" `T.append` diffTreeName) $ do (text ">")
+        else 
+          div ! class_ "src-node__label" $ do
+            a ! name (stringValue $ show $ reverseMapping ^. reverseMappingSrc . srcNodeId) $ do
+              text label
+              text " "
+              text diffTreeName
+            forM_ (reverseMapping ^. reverseMappingDsts) $ \(dst, _cost) -> do
+              text " "
+              a ! href (stringValue $ "#" ++ (show $ dst ^. dstNodeId)) $ do
+                text "*"
+            div ! class_ "src-node__children" $
+              forM_ (reverseMapping ^. reverseMappingChildren) srcMapping
 
 dstMapping :: Mapping -> Html
-dstMapping mapping = div ! class_ "dst-node" $ do
-  div ! class_ "dst-node__label" $ do
-    a ! name (stringValue $ show $ mapping ^. mappingDst . dstNodeId) ! href (dstMappingLink mapping) $ do
-      text $ mapping ^. mappingDst . diffTree . DiffTree.label
-      text " "
-      text $ mapping ^. mappingDst . diffTree . DiffTree.name . non ""
-  div ! class_ "dst-node_children" $
-    forM_ (mapping ^. mappingChildren) dstMapping
+dstMapping mapping = div ! class_ "dst-node" $
+  if mapping ^. mappingDst . diffTree . DiffTree.label == "METADATA-REF"
+    then a ! href (textValue $ "#" `T.append` (mapping ^. mappingDst . diffTree . DiffTree.name . non "")) $ do (text ">")
+    else do
+      div ! class_ "dst-node__label" $ do
+        a ! name (stringValue $ show $ mapping ^. mappingDst . dstNodeId) ! href (dstMappingLink mapping) $ do
+          text $ mapping ^. mappingDst . diffTree . DiffTree.label
+          text " "
+          text $ mapping ^. mappingDst . diffTree . DiffTree.name . non ""
+      div ! class_ "dst-node_children" $
+        forM_ (mapping ^. mappingChildren) dstMapping
 
 dstMappingLink :: Mapping -> AttributeValue
 dstMappingLink mapping = case mapping ^. mappingSrc of

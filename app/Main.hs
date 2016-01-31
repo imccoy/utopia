@@ -34,6 +34,10 @@ projectionCodeId (ProjectionCode id _ _) = id
 
 data Projection = Projection { projectionCode :: [ProjectionCode], projectionNames :: Map CodeDbId Text }
 
+instance Monoid Projection where
+  mempty = Projection [] Map.empty
+  mappend (Projection code1 names1) (Projection code2 names2) = Projection (code1 ++ code2) (Map.union names1 names2)
+
 type CodeDbIdGen a = ReaderT Text IO a
 
 runCodeDbIdGen :: CodeDbIdGen a -> IO a
@@ -81,17 +85,16 @@ projectionCodeDbIds (ProjectionCode id _ children) = id `Set.insert` (Set.unions
 
 bindingListProjection :: [Lam.Binding Lam.Exp] -> CodeDbIdGen Projection
 bindingListProjection bindings = do
-  (projectionsCode, projectionsNames) <- unzip <$> mapM (Lam.bindingWithId nextCodeDbId >=> pure . diffTreeProjection . Lam.bindingDiffTree . Lam.mapBindingId codeDbIdText) bindings
-  return $ Projection projectionsCode (Map.unions projectionsNames)
+  bindingsWithIds <- mapM (Lam.bindingWithId nextCodeDbId) bindings
+  return . mconcat $ diffTreeProjection <$> Lam.bindingDiffTrees (Lam.mapBindingId codeDbIdText <$> bindingsWithIds)
 
-diffTreeProjection :: DiffTree.DiffTree -> (ProjectionCode, Map CodeDbId Text)
+diffTreeProjection :: DiffTree.DiffTree -> Projection
 diffTreeProjection (DiffTree.DiffTree id label name children) = 
-  let (childrenProjectionCode, childNameMaps) = unzip $ map diffTreeProjection children
+  let Projection childrenProjectionCode childNamesMap = foldMap diffTreeProjection children
       projectionCode = ProjectionCode (CodeDbId id) (CodeDbType label) childrenProjectionCode
 
-      childNamesMap = Map.unions childNameMaps
       projectionNames = maybe childNamesMap (\childName -> Map.insert (CodeDbId id) childName childNamesMap) name
-   in (projectionCode, projectionNames)
+   in Projection [projectionCode] projectionNames
 
 initFromProjection :: Projection -> ([CodeDbId], CodeDb)
 initFromProjection Projection{..} = (id, CodeDb tree projectionNames)

@@ -5,7 +5,10 @@ resolver: nightly-2015-10-24
 
 # Local packages, usually specified by relative directory name
 packages:
-- '.'
+  - '.'
+  - location:
+      git: git@github.com:imccoy/adaptive.git
+      commit: 159d33fa38bcfaa0e30de4f11d5ebd450b2faeb8  
 
 # Packages to be pulled from upstream that are not in the resolver (e.g., acme-missiles-0.3)
 extra-deps:

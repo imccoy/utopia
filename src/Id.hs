@@ -10,7 +10,7 @@ import Data.Traversable as T
 
 data WithId i v = WithId { _id :: i, _value :: v }
   deriving (Show, Functor)
-data WithIdF i v f = WithIdF (WithId i (v f))
+data WithIdF i f v = WithIdF (WithId i (f v))
   deriving (Show, Functor)
 type WithIdR i v = Fix (WithIdF i v)
 
@@ -25,7 +25,7 @@ cataM
   -> m a               -- ^ result
 cataM f = c where c = f <=< T.mapM c <=< (return . project)
 
-withIdM :: (Monad m, Traversable v) => m i -> (Fix v) -> m (WithIdR i v)
+withIdM :: (Monad m, Traversable v) => m i -> Fix v -> m (WithIdR i v)
 withIdM gen = cataM $ \v -> do
   id <- gen
   pure $ withIdR id v

@@ -22,9 +22,11 @@ library
                        NamedFieldPuns,
                        OverloadedStrings,
                        RecordWildCards,
-                       TemplateHaskell
+                       TemplateHaskell,
+                       TupleSections
   default-language:    Haskell2010
   build-depends:       base >=4.8 && <4.9,
+                       Adaptive,
                        containers,
                        edit-distance,
                        lens,
