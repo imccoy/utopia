@@ -4,7 +4,10 @@ import Prelude hiding (id, putStrLn)
 
 import Control.Lens hiding (children, mapping)
 import Control.Monad.Reader
+import Control.Monad.Adaptive
+import Control.Monad.Adaptive.Ref
 import qualified Data.ByteString.Lazy as LB
+import Data.IORef (IORef)
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Set (Set)
@@ -24,6 +27,8 @@ import qualified Code
 import CodeDb
 import qualified Diff
 import qualified DiffTree
+import qualified Eval
+import qualified Id
 import qualified Lam
 
 import qualified Html
@@ -61,11 +66,29 @@ nextCodeDbId = do
 
 main :: IO ()
 main = do
-  v1projection <- runCodeDbIdGen $ bindingListProjection Code.v1
+  v1bindingsWithIds <- runCodeDbIdGen $ mapM (Lam.bindingWithId nextCodeDbId) Code.v1
+  let v1projection = bindingsWithIdsProjection v1bindingsWithIds
   let initialDb = initFromProjection v1projection
   printProjection v1projection
+  let v1resolved = inM . pure $ Lam.resolveVars v1bindingsWithIds
+  let v1bindingsWithMod = (mapM (inM . pure . Eval.bindingWithMod) v1bindingsWithIds) :: Changeable IO IORef [Eval.BindingWithMod IO IORef CodeDbId]
+  let toplevelEnv = do bindings <- v1bindingsWithMod
+                       assocs <- forM bindings $ \binding -> do (id, name, exp) <- Eval.bindingExp binding
+                                                                pure $ (id, Map.singleton name (inM $ pure $ Eval.ValExp exp))
+                       pure $ Map.fromList assocs
+  let program = do env <- toplevelEnv
+                   let [Just valCh] = [ Map.lookup "main" frame | frame <- Map.elems env, Map.member "main" frame ]
+                   (Eval.ValExp program) <- valCh
+                   pure program
+  let v1result = Eval.eval v1bindingsWithMod v1resolved <$> program <*> pure toplevelEnv <*> pure []
+  run $ inCh $ do
+    result <- v1result
+    result' <- result
+    inM $ putStrLn $ T.pack $ show result'
+  
 
-  v2projection <- runCodeDbIdGen $ bindingListProjection Code.v2
+  v2bindingsWithIds <- runCodeDbIdGen $ mapM (Lam.bindingWithId nextCodeDbId) Code.v2
+  let v2projection = bindingsWithIdsProjection v2bindingsWithIds
   printProjection v2projection
 
   let (reversedDiffResult, diffResult) = diffProjection initialDb v2projection
@@ -83,10 +106,8 @@ main = do
 projectionCodeDbIds :: ProjectionCode -> Set CodeDbId
 projectionCodeDbIds (ProjectionCode id _ children) = id `Set.insert` (Set.unions $ map projectionCodeDbIds children)
 
-bindingListProjection :: [Lam.Binding Lam.Exp] -> CodeDbIdGen Projection
-bindingListProjection bindings = do
-  bindingsWithIds <- mapM (Lam.bindingWithId nextCodeDbId) bindings
-  return . mconcat $ diffTreeProjection <$> Lam.bindingDiffTrees (Lam.mapBindingId codeDbIdText <$> bindingsWithIds)
+bindingsWithIdsProjection :: [Lam.BindingWithId CodeDbId] -> Projection
+bindingsWithIdsProjection bindingsWithIds = mconcat $ diffTreeProjection <$> Lam.bindingDiffTrees (Lam.mapBindingId codeDbIdText <$> bindingsWithIds)
 
 diffTreeProjection :: DiffTree.DiffTree -> Projection
 diffTreeProjection (DiffTree.DiffTree id label name children) = 

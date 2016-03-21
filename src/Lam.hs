@@ -3,8 +3,8 @@ module Lam where
 
 import Prelude hiding (exp, id)
 
-import Data.Foldable (fold)
-import Data.Functor.Foldable
+import Data.Foldable
+import Data.Functor.Foldable.Extended
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Set (Set)
@@ -16,7 +16,7 @@ import qualified Id
 
 type Name = T.Text
 
-data Literal = Number Int | Text T.Text
+data Literal = Number Integer | Text T.Text
   deriving (Show)
 
 data ExpF e = LamF [Name] e
@@ -42,28 +42,33 @@ var name = Fix (VarF name)
 lit :: Literal -> Exp
 lit literal = Fix (LitF literal)
 
-type ExpWithId i = Id.WithIdR i ExpF
+data ExpWithIdF i v = ExpWithIdF (Id.WithId i (ExpF v))
+  deriving (Prelude.Functor, Prelude.Foldable)
+type ExpWithId i = Fix (ExpWithIdF i)
 type BindingWithId i = Id.WithId i (Binding (ExpWithId i))
 
 bindingWithId :: (Monad m) => m i -> Binding Exp -> m (BindingWithId i)
 bindingWithId gen (Binding name exp) = do
-  (bindingId :: i) <- gen
-  (expWithIds :: ExpWithId i) <- Id.withIdM gen exp
-  pure $ Id.WithId bindingId (Binding name expWithIds)
+  bindingId <- gen
+  expsWithIds <- expsWithIdM gen exp
+  pure $ Id.WithId bindingId (Binding name expsWithIds)
+
+expsWithIdM :: (Monad m) => m i -> Exp -> m (ExpWithId i)
+expsWithIdM gen = cataM $ \v -> Fix . ExpWithIdF <$> (Id.WithId <$> gen <*> pure v)
 
 mapBindingId :: (i1 -> i2) -> BindingWithId i1 -> BindingWithId i2
-mapBindingId f (Id.WithId i (Binding n v)) = Id.WithId (f i) $ Binding n (Id.mapIds f v)
+mapBindingId f (Id.WithId i (Binding n v)) = Id.WithId (f i) $ Binding n $ cata go v
+  where go (ExpWithIdF withId) = Fix $ ExpWithIdF (Id.mapId f withId)
 
-newtype MonoidMap k v = MonoidMap (Map k v)
-unMonoidMap (MonoidMap m) = m
+newtype MonoidMap k v = MonoidMap { unMonoidMap :: Map k v }
 
 instance (Ord k, Monoid v) => Monoid (MonoidMap k v) where
   mempty = MonoidMap Map.empty
   mappend (MonoidMap a) (MonoidMap b) = MonoidMap (Map.unionWith mappend a b)
 
-type Env i = Map i (Maybe i)
+type Resolved i = Map i (Maybe i)
 
-resolveVars :: (Ord i) => [BindingWithId i] -> Env i
+resolveVars :: (Ord i) => [BindingWithId i] -> Resolved i
 resolveVars bindings = (Just <$> boundInExprs) `mappend` mconcat [ let maybeId = Map.lookup name topLevelBindings
                                                                     in Map.fromList $ (, maybeId) <$> Set.toList varIds
                                                                  | (name, varIds) <- Map.assocs $ unMonoidMap unboundInExprs]
@@ -73,7 +78,7 @@ resolveVars bindings = (Just <$> boundInExprs) `mappend` mconcat [ let maybeId =
 
 resolveExpVars :: (Ord i) => ExpWithId i -> (MonoidMap Name (Set i), Map i i)
 resolveExpVars = 
-  cata $ \(Id.WithIdF (Id.WithId i v)) ->
+  cata $ \(ExpWithIdF (Id.WithId i v)) ->
     case v of
       VarF name -> (MonoidMap $ Map.singleton name (Set.singleton i), Map.empty)
       LamF names exp -> foldr bindName exp names
@@ -82,15 +87,15 @@ resolveExpVars =
                                                  Nothing -> (unbound, bound)
       _ -> Data.Foldable.fold v
 
-bindingDiffTree :: Env T.Text -> BindingWithId T.Text -> DiffTree
+bindingDiffTree :: Resolved T.Text -> BindingWithId T.Text -> DiffTree
 bindingDiffTree env (Id.WithId id (Binding name exp)) = DiffTree id "Binding" (Just name) [expDiffTree env exp]
 
 bindingDiffTrees :: [BindingWithId T.Text] -> [DiffTree]
 bindingDiffTrees bindings = fmap (bindingDiffTree env) bindings
   where env = resolveVars bindings
 
-expDiffTree :: Env T.Text -> ExpWithId T.Text -> DiffTree
-expDiffTree env = cata $ \(Id.WithIdF (Id.WithId i v)) -> case v of
+expDiffTree :: Resolved T.Text -> ExpWithId T.Text -> DiffTree
+expDiffTree env = cata $ \(ExpWithIdF (Id.WithId i v)) -> case v of
   LamF args body  -> DiffTree i "Lam" Nothing $
                                       [DiffTree (argId i n)
                                                  "LamArg"
