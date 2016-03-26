@@ -70,21 +70,18 @@ main = do
   let v1projection = bindingsWithIdsProjection v1bindingsWithIds
   let initialDb = initFromProjection v1projection
   printProjection v1projection
-  let v1resolved = inM . pure $ Lam.resolveVars v1bindingsWithIds
-  let v1bindingsWithMod = (mapM (inM . pure . Eval.bindingWithMod) v1bindingsWithIds) :: Changeable IO IORef [Eval.BindingWithMod IO IORef CodeDbId]
-  let toplevelEnv = do bindings <- v1bindingsWithMod
-                       assocs <- forM bindings $ \binding -> do (id, name, exp) <- Eval.bindingExp binding
-                                                                pure $ (id, Map.singleton name (inM $ pure $ Eval.ValExp exp))
-                       pure $ Map.fromList assocs
-  let program = do env <- toplevelEnv
-                   let [Just valCh] = [ Map.lookup "main" frame | frame <- Map.elems env, Map.member "main" frame ]
-                   (Eval.ValExp program) <- valCh
-                   pure program
-  let v1result = Eval.eval v1bindingsWithMod v1resolved <$> program <*> pure toplevelEnv <*> pure []
-  run $ inCh $ do
-    result <- v1result
-    result' <- result
-    inM $ putStrLn $ T.pack $ show result'
+  run $ do
+    m_bindingsWithIds <- newModBy (\bs1 bs2 -> (Set.fromList . map Id._id $ bs1) == (Set.fromList . map Id._id $ bs2)) $ inM $ pure v1bindingsWithIds
+    resolved <- inCh $ Lam.resolveVars <$> readMod m_bindingsWithIds
+    current_bindingsWithMod <- inCh (mapM Eval.bindingWithMod =<< readMod m_bindingsWithIds)
+    toplevelEnv <- do assocs <- inCh $ forM current_bindingsWithMod $  \binding -> do (id, name, exp) <- Eval.bindingExp binding
+                                                                                      pure $ (id, Map.singleton name (Eval.ValExp exp))
+                      pure $ Map.fromList assocs
+    program <- inCh $ do let [Just valCh] = [ Map.lookup "main" frame | frame <- Map.elems toplevelEnv, Map.member "main" frame ]
+                         let (Eval.ValExp program) = valCh
+                         pure program
+    eval <- inCh $ Eval.eval current_bindingsWithMod resolved program toplevelEnv []
+    inM . putStrLn . T.pack . show $ eval
   
 
   v2bindingsWithIds <- runCodeDbIdGen $ mapM (Lam.bindingWithId nextCodeDbId) Code.v2

@@ -43,7 +43,7 @@ lit :: Literal -> Exp
 lit literal = Fix (LitF literal)
 
 data ExpWithIdF i v = ExpWithIdF (Id.WithId i (ExpF v))
-  deriving (Prelude.Functor, Prelude.Foldable)
+  deriving (Prelude.Functor, Prelude.Foldable, Prelude.Traversable)
 type ExpWithId i = Fix (ExpWithIdF i)
 type BindingWithId i = Id.WithId i (Binding (ExpWithId i))
 
