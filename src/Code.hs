@@ -17,5 +17,5 @@ v2 = [ Binding "addn" $ lam ["n", "m"] $
      , Binding "addntwice" $ lam ["ntwice", "mtwice"] $
            app (var "addn") [app (var "addn") [var "ntwice", var "mtwice"], var "ntwice"]
      , Binding "main" $ lam [] $
-           app (var "addntwice") [lit (Number 5), lit (Number 2)]
+           app (var "addntwice") [lit (Number 7), lit (Number 3)]
      ]

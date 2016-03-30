@@ -15,6 +15,7 @@ import qualified Id
 import qualified Lam
 
 data Val m r i = Text T.Text | Number Integer | ValExp (ExpWithMod m r i)
+  deriving (Eq)
 
 instance Show (Val m r i) where
   show (Text t) = "Text " ++ T.unpack t
@@ -27,6 +28,8 @@ data EvalError i = UndefinedVar i T.Text | TypeError i T.Text | InternalError (I
   deriving (Eq, Show)
 
 data ExpWithModF m r i v = ExpWithModF (Modifiable m r (Id.WithId i (Lam.ExpF v)))
+  deriving (Eq)
+
 
 type ExpWithMod m r i = Fix (ExpWithModF m r i)
 type BindingWithMod m r i = Modifiable m r (Id.WithId i (Lam.Binding (ExpWithMod m r i)))
@@ -75,47 +78,51 @@ bindingExp expMod = do (Id.WithId id (Lam.Binding n (Fix (ExpWithModF exp)))) <-
 --    else expWithModByIdInExp id exp
 
 eval :: (Ref m r, Ord i)
-  => [BindingWithMod m r i]
-  -> Lam.Resolved i
+  => Changeable m r [BindingWithMod m r i]
+  -> Modifiable m r (Lam.Resolved i)
   -> ExpWithMod m r i
-  -> Map i (Map T.Text (Val m r i))
+  -> Changeable m r (Map i (Map T.Text (Val m r i)))
   -> [Val m r i]
   -> Changeable m r (Either [EvalError i] (Val m r i))
-eval bindings resolved (Fix (ExpWithModF expMod)) env stack = do
+eval bindings resolved (Fix (ExpWithModF expMod)) ch_env stack = do
   (Id.WithId id v) <- readMod expMod 
   case v of
     Lam.LamF args exp -> let (stackElems, stack') = splitAt (length args) stack
-                             frame = Map.fromList $ zip args stackElems
-                             env' = Map.insert id frame env
+                             env' = do env <- ch_env
+                                       let frame = Map.fromList $ zip args stackElems
+                                       pure $ Map.insert id frame env
                           in eval bindings resolved exp env' stack'
-    Lam.AppF exp args -> do vals <- forM args $ \arg -> eval bindings resolved arg env stack
+    Lam.AppF exp args -> do vals <- forM args $ \arg -> eval bindings resolved arg ch_env stack
                             let (errors, successes) = partitionEithers vals
                             if errors == []
-                              then eval bindings resolved exp env (successes ++ stack)
+                              then eval bindings resolved exp ch_env (successes ++ stack)
                               else pure $ Left $ concat errors
-    Lam.VarF var -> do case lookupVar id var resolved env of
-                         Nothing -> case primitive id var of
-                                      Just prim -> prim bindings resolved env stack
-                                      _ -> pure $ Left [UndefinedVar id var]
-                         Just val -> do
-                           case val of
-                             ValExp exp -> eval bindings resolved exp env stack
-                             x -> pure $ Right x
+    Lam.VarF var -> do lookupVar id var resolved ch_env >>= 
+                         \case
+                           Nothing -> case primitive id var of
+                                        Just prim -> prim bindings resolved ch_env stack
+                                        _ -> pure $ Left [UndefinedVar id var]
+                           Just val -> do
+                             case val of
+                               ValExp exp -> eval bindings resolved exp ch_env stack
+                               x -> pure $ Right x
     Lam.LitF (Lam.Number n) -> pure $ Right $ Number n
     Lam.LitF (Lam.Text n) -> pure $ Right $ Text n
                        
-lookupVar :: (Ord i, Ref m r) => i -> T.Text -> Lam.Resolved i -> Map i (Map T.Text (Val m r i)) -> Maybe (Val m r i)
-lookupVar id var resolved env = do frameId <- join $ Map.lookup id resolved
-                                   frame <- Map.lookup frameId env
-                                   Map.lookup var frame
+lookupVar :: (Ord i, Ref m r) => i -> T.Text -> Modifiable m r (Lam.Resolved i) -> Changeable m r (Map i (Map T.Text (Val m r i))) -> Changeable m r (Maybe (Val m r i))
+lookupVar id var resolvedMod ch_env = do resolved <- readMod resolvedMod
+                                         env <- ch_env
+                                         pure $ do frameId <- join $ Map.lookup id resolved
+                                                   frame <- Map.lookup frameId env
+                                                   Map.lookup var frame
 
 primitive :: (Ref m r)
           => i
           -> T.Text
           -> Maybe (
-            [BindingWithMod m r i] ->
-            (Lam.Resolved i) ->
-            (Map i (Map T.Text (Val m r i))) ->
+            Changeable m r ([BindingWithMod m r i]) ->
+            (Modifiable m r (Lam.Resolved i)) ->
+            (Changeable m r (Map i (Map T.Text (Val m r i)))) ->
             [Val m r i] ->
             Changeable m r (Either [EvalError i] (Val m r i))
           )

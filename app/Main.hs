@@ -70,19 +70,6 @@ main = do
   let v1projection = bindingsWithIdsProjection v1bindingsWithIds
   let initialDb = initFromProjection v1projection
   printProjection v1projection
-  run $ do
-    m_bindingsWithIds <- newModBy (\bs1 bs2 -> (Set.fromList . map Id._id $ bs1) == (Set.fromList . map Id._id $ bs2)) $ inM $ pure v1bindingsWithIds
-    resolved <- inCh $ Lam.resolveVars <$> readMod m_bindingsWithIds
-    current_bindingsWithMod <- inCh (mapM Eval.bindingWithMod =<< readMod m_bindingsWithIds)
-    toplevelEnv <- do assocs <- inCh $ forM current_bindingsWithMod $  \binding -> do (id, name, exp) <- Eval.bindingExp binding
-                                                                                      pure $ (id, Map.singleton name (Eval.ValExp exp))
-                      pure $ Map.fromList assocs
-    program <- inCh $ do let [Just valCh] = [ Map.lookup "main" frame | frame <- Map.elems toplevelEnv, Map.member "main" frame ]
-                         let (Eval.ValExp program) = valCh
-                         pure program
-    eval <- inCh $ Eval.eval current_bindingsWithMod resolved program toplevelEnv []
-    inM . putStrLn . T.pack . show $ eval
-  
 
   v2bindingsWithIds <- runCodeDbIdGen $ mapM (Lam.bindingWithId nextCodeDbId) Code.v2
   let v2projection = bindingsWithIdsProjection v2bindingsWithIds
@@ -90,6 +77,26 @@ main = do
 
   let (reversedDiffResult, diffResult) = diffProjection initialDb v2projection
   putStrLn $ T.pack $ show diffResult
+
+  run $ do
+    m_bindingsWithIds <- newModBy (\bs1 bs2 -> (Set.fromList . map Id._id $ bs1) == (Set.fromList . map Id._id $ bs2)) $ inM $ pure v1bindingsWithIds
+    resolved <- newMod $ Lam.resolveVars <$> readMod m_bindingsWithIds
+    let ch_bindingsWithMod = mapM Eval.bindingWithMod =<< readMod m_bindingsWithIds
+    let ch_toplevelEnv = do bindingsWithMod <- ch_bindingsWithMod
+                            assocs <- forM bindingsWithMod $ \binding -> do (\(id, name, exp) -> (id, Map.singleton name (Eval.ValExp exp))) <$> Eval.bindingExp binding
+                            pure $ Map.fromList assocs
+    let ch_program = do toplevelEnv <- ch_toplevelEnv
+                        let [Just valCh] = [ Map.lookup "main" frame | frame <- Map.elems toplevelEnv, Map.member "main" frame ]
+                            (Eval.ValExp program) = valCh
+                         in pure program
+    eval <- newMod $ do program <- ch_program
+                        Eval.eval ch_bindingsWithMod resolved program ch_toplevelEnv []
+    inCh $ inM . putStrLn . T.pack . show =<< readMod eval
+  
+    change m_bindingsWithIds v2bindingsWithIds
+    propagate
+    inCh $ inM . putStrLn . T.pack . show =<< readMod eval
+  
 
   let html = Html.mappingHtml reversedDiffResult diffResult
   (filePath, handle) <- openTempFile "." ".html"
