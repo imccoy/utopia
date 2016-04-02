@@ -83,19 +83,19 @@ eval :: (Ref m r, Ord i)
   -> ExpWithMod m r i
   -> Changeable m r (Map i (Map T.Text (Val m r i)))
   -> [Val m r i]
-  -> Changeable m r (Either [EvalError i] (Val m r i))
-eval bindings resolved (Fix (ExpWithModF expMod)) ch_env stack = do
+  -> Changeable m r (Modifiable m r (Either [EvalError i] (Val m r i)))
+eval bindings resolved (Fix (ExpWithModF expMod)) ch_env stack = newMod $ do
   (Id.WithId id v) <- readMod expMod 
   case v of
     Lam.LamF args exp -> let (stackElems, stack') = splitAt (length args) stack
                              env' = do env <- ch_env
                                        let frame = Map.fromList $ zip args stackElems
                                        pure $ Map.insert id frame env
-                          in eval bindings resolved exp env' stack'
-    Lam.AppF exp args -> do vals <- forM args $ \arg -> eval bindings resolved arg ch_env stack
+                          in eval bindings resolved exp env' stack' >>= readMod
+    Lam.AppF exp args -> do vals <- forM args $ \arg -> eval bindings resolved arg ch_env stack >>= readMod
                             let (errors, successes) = partitionEithers vals
                             if errors == []
-                              then eval bindings resolved exp ch_env (successes ++ stack)
+                              then eval bindings resolved exp ch_env (successes ++ stack) >>= readMod
                               else pure $ Left $ concat errors
     Lam.VarF var -> do lookupVar id var resolved ch_env >>= 
                          \case
@@ -104,7 +104,7 @@ eval bindings resolved (Fix (ExpWithModF expMod)) ch_env stack = do
                                         _ -> pure $ Left [UndefinedVar id var]
                            Just val -> do
                              case val of
-                               ValExp exp -> eval bindings resolved exp ch_env stack
+                               ValExp exp -> eval bindings resolved exp ch_env stack >>= readMod
                                x -> pure $ Right x
     Lam.LitF (Lam.Number n) -> pure $ Right $ Number n
     Lam.LitF (Lam.Text n) -> pure $ Right $ Text n

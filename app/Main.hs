@@ -91,11 +91,11 @@ main = do
                          in pure program
     eval <- newMod $ do program <- ch_program
                         Eval.eval ch_bindingsWithMod resolved program ch_toplevelEnv []
-    inCh $ inM . putStrLn . T.pack . show =<< readMod eval
+    inCh $ inM . putStrLn . T.pack . show =<< readMod =<< readMod eval
   
     change m_bindingsWithIds v2bindingsWithIds
     propagate
-    inCh $ inM . putStrLn . T.pack . show =<< readMod eval
+    inCh $ inM . putStrLn . T.pack . show =<< readMod =<< readMod eval
   
 
   let html = Html.mappingHtml reversedDiffResult diffResult
