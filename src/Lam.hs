@@ -104,11 +104,12 @@ expDiffTree env = cata $ \(ExpWithIdF (Id.WithId i v)) -> case v of
                                       | (n, arg) <- zip [0..] args
                                       ] ++ [body]
   VarF name       -> DiffTree i "Var" (Just name) 
-                                      [DiffTree (i `T.append` ".Ref")
-                                                "METADATA-REF"
-                                                (Data.Foldable.fold $ Map.lookup i env)
-                                                []
-                                      ]
+                                      --[DiffTree (i `T.append` ".Ref")
+                                      --          "METADATA-REF"
+                                      --          (Data.Foldable.fold $ Map.lookup i env)
+                                      --          []
+                                      --]
+                                      []
   AppF f args     -> DiffTree i "App" Nothing $
                                       f:[wrap (argId i n)
                                               "AppArg"

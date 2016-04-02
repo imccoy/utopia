@@ -66,23 +66,25 @@ childInSrcNotHereCost = 5
 inventedNodeCost :: Int
 inventedNodeCost = 100 
 
-scoreMapping :: Mapping -> Int
-scoreMapping (Mapping _ src renameCost childMappings) = numUnmappedChildren * childInDstNotMappedCost + numDroppedSrcChildren * childInSrcNotHereCost + renameCost
-  where numUnmappedChildren = length $ filter (isNothing . _mappingSrc) childMappings
-        numDroppedSrcChildren = let srcChildIds = map (^. srcNodeId) (src ^. _Just . srcNodeChildren)
+scoreMapping :: DstNode -> SrcNode -> [Mapping] -> Maybe Int
+scoreMapping dst src childMappings = do renameCost <- renameCostFor (src ^. diffTree . label) (src ^. diffTree . name) (dst ^. diffTree . label) (dst ^. diffTree . name)
+                                        pure $ numUnmappedChildren * childInDstNotMappedCost + numDroppedSrcChildren * childInSrcNotHereCost + mappedChildrenCost + renameCost
+  where mappingTo src = Mapping dst (Just src) <$> renameCostFor (src ^. diffTree . label) (src ^. diffTree . name) (dst ^. diffTree . label) (dst ^. diffTree . name) <*> pure childMappings
+        (unmappedChildren, mappedChildren) = partition (isNothing . _mappingSrc) childMappings
+        numUnmappedChildren = length unmappedChildren
+        mappedChildrenCost = sum $ map _mappingCost mappedChildren
+        numDroppedSrcChildren = let srcChildIds = map (^. srcNodeId) (src ^. srcNodeChildren)
                                     childMappingSrcIds = map (^. srcNodeId) $ catMaybes $ map (^. mappingSrc) childMappings
                                  in length $ srcChildIds \\ childMappingSrcIds
 
-compareMappings :: Mapping -> Mapping -> Ordering
-compareMappings a b = compare (scoreMapping a) (scoreMapping b)
-
 findMatchingNode :: DstNode -> [Mapping] -> SrcNode -> Mapping
-findMatchingNode dst dstChildMappings = findMatchingNode'
-  where findMatchingNode' src = case possibleMappings src of
-                                  [] -> Mapping dst Nothing inventedNodeCost dstChildMappings
-                                  mappings -> minimumBy compareMappings mappings
-        possibleMappings src = catMaybes [ mappingTo srcNode | srcNode <- transitiveClosure (^. srcNodeChildren) src]
-        mappingTo src = Mapping dst (Just src) <$> renameCostFor (src ^. diffTree . label) (src ^. diffTree . name) (dst ^. diffTree . label) (dst ^. diffTree . name) <*> pure dstChildMappings
+findMatchingNode dst dstChildMappings src = let scored = catMaybes [ (srcNode,) <$> scoreMapping dst srcNode dstChildMappings | srcNode <- transitiveClosure (^. srcNodeChildren) src]
+                                             in case scored of
+                                               [] -> Mapping dst Nothing inventedNodeCost dstChildMappings
+                                               _ -> let (srcNode, score) = minimumBy (\a b -> compare (snd a) (snd b)) scored
+                                                     in Mapping dst (Just srcNode) score dstChildMappings
+
+
 
 matchTrees :: SrcNode -> DstNode -> Mapping
 matchTrees src = matchTrees'
