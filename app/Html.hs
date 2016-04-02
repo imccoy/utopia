@@ -8,7 +8,7 @@ import qualified Data.Text as T
 import Text.Blaze.Html5
 import Text.Blaze.Html5.Attributes
 
-import Diff (Mapping, mappingDst, mappingSrc, mappingChildren, ReverseMapping, reverseMappingSrc, reverseMappingDsts, reverseMappingChildren)
+import Diff (Mapping, mappingCost, mappingDst, mappingSrc, mappingChildren, ReverseMapping, reverseMappingSrc, reverseMappingDsts, reverseMappingChildren)
 import DiffTree hiding (name, label)
 import qualified DiffTree
 
@@ -37,10 +37,11 @@ srcMapping reverseMapping =
               text label
               text " "
               text diffTreeName
-            forM_ (reverseMapping ^. reverseMappingDsts) $ \(dst, _cost) -> do
+            forM_ (reverseMapping ^. reverseMappingDsts) $ \(dst, cost) -> do
               text " "
               a ! href (stringValue $ "#" ++ (show $ dst ^. dstNodeId)) $ do
                 text "*"
+                sup $ text $ T.pack $ show cost
             div ! class_ "src-node__children" $
               forM_ (reverseMapping ^. reverseMappingChildren) srcMapping
 
@@ -54,6 +55,7 @@ dstMapping mapping = div ! class_ "dst-node" $
           text $ mapping ^. mappingDst . diffTree . DiffTree.label
           text " "
           text $ mapping ^. mappingDst . diffTree . DiffTree.name . non ""
+          sup $ text $ T.pack $ show $ mapping ^. mappingCost
       div ! class_ "dst-node_children" $
         forM_ (mapping ^. mappingChildren) dstMapping
 
