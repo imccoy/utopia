@@ -1,4 +1,4 @@
-module DiffTree (DiffTree(..), label, name, SrcNode(..), DstNode(..), diffTree, SrcNodeId, DstNodeId, srcNodeId, dstNodeId, srcNodeChildren, dstNodeChildren, humanReadableIds) where
+module DiffTree (DiffTree(..), label, name, SrcNode(..), DstNode(..), diffTree, SrcNodeId, DstNodeId, srcNodeId, srcNodeIdText, dstNodeId, dstNodeIdText, srcNodeChildren, dstNodeChildren, humanReadableIds) where
 
 import Prelude hiding (id)
 
@@ -20,17 +20,14 @@ makeFields ''SrcNode
 makeFields ''DstNode
 
 newtype SrcNodeId = SrcNodeId Text
-  deriving (Eq, Ord)
+  deriving (Eq, Ord, Show)
 
-instance Show SrcNodeId where
-  show (SrcNodeId id) = T.unpack id
-
+srcNodeIdText (SrcNodeId t) = t
 
 newtype DstNodeId = DstNodeId Text
-  deriving (Eq, Ord)
+  deriving (Eq, Ord, Show)
 
-instance Show DstNodeId where
-  show (DstNodeId id) = T.unpack id
+dstNodeIdText (DstNodeId t) = t
 
 srcNodeId :: Getter SrcNode SrcNodeId
 srcNodeId = diffTree . diffTreeId . (to SrcNodeId)

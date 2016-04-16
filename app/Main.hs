@@ -83,7 +83,7 @@ main = do
     resolved <- newMod $ Lam.resolveVars <$> readMod m_bindingsWithIds
     let ch_bindingsWithMod = mapM Eval.bindingWithMod =<< readMod m_bindingsWithIds
     let ch_toplevelEnv = do bindingsWithMod <- ch_bindingsWithMod
-                            assocs <- forM bindingsWithMod $ \binding -> do (\(id, name, exp) -> (id, Map.singleton name (Eval.ValExp exp))) <$> Eval.bindingExp binding
+                            assocs <- forM bindingsWithMod $ \binding -> do (\(id, name, exp) -> (id, Map.singleton name (Eval.ValExp exp))) <$> Eval.flattenBinding binding
                             pure $ Map.fromList assocs
     let ch_program = do toplevelEnv <- ch_toplevelEnv
                         let [Just valCh] = [ Map.lookup "main" frame | frame <- Map.elems toplevelEnv, Map.member "main" frame ]
@@ -96,6 +96,35 @@ main = do
     change m_bindingsWithIds v2bindingsWithIds
     propagate
     inCh $ inM . putStrLn . T.pack . show =<< readMod =<< readMod eval
+
+  run $ do
+    m_bindingsWithIds <- newModBy (\bs1 bs2 -> (Set.fromList . map Id._id $ bs1) == (Set.fromList . map Id._id $ bs2)) $ inM $ pure v1bindingsWithIds
+    resolved <- newMod $ Lam.resolveVars <$> readMod m_bindingsWithIds
+    m_bindingsWithMod <- newMod (mapM Eval.bindingWithMod =<< readMod m_bindingsWithIds)
+    let ch_bindingsWithMod = readMod m_bindingsWithMod
+    let ch_toplevelEnv = do bindingsWithMod <- ch_bindingsWithMod
+                            assocs <- forM bindingsWithMod $ \binding -> do (\(id, name, exp) -> (id, Map.singleton name (Eval.ValExp exp))) <$> Eval.flattenBinding binding
+                            pure $ Map.fromList assocs
+    let ch_program = do toplevelEnv <- ch_toplevelEnv
+                        let [Just valCh] = [ Map.lookup "main" frame | frame <- Map.elems toplevelEnv, Map.member "main" frame ]
+                            (Eval.ValExp program) = valCh
+                         in pure program
+    eval <- newMod $ do program <- ch_program
+                        Eval.eval ch_bindingsWithMod resolved program ch_toplevelEnv []
+    inCh $ inM . putStrLn . T.pack . show =<< readMod =<< readMod eval
+  
+    m_v2bindingsWithIds <- newModBy (\bs1 bs2 -> (Set.fromList . map Id._id $ bs1) == (Set.fromList . map Id._id $ bs2)) $ inM $ pure v2bindingsWithIds
+    let zeroCostMappings = Map.map (CodeDbId . DiffTree.dstNodeIdText) $ Map.mapKeys (CodeDbId . DiffTree.srcNodeIdText) $ Diff.zeroCostMappings diffResult
+    let v2reuses = pure . Map.unions =<< mapM (\b -> Eval.bindingExp b >>= Eval.reuses zeroCostMappings) =<< ch_bindingsWithMod
+    let ch_v2bindingsWithMod = do reuses <- v2reuses
+                                  bindingsWithIds <- readMod m_v2bindingsWithIds
+                                  mapM (\binding -> Eval.bindingWithModReusing reuses binding) bindingsWithIds
+ 
+    change m_bindingsWithMod =<< inCh ch_v2bindingsWithMod
+    change m_bindingsWithIds v2bindingsWithIds
+    propagate
+    inCh $ inM . putStrLn . T.pack . show =<< readMod =<< readMod eval
+
   
 
   let html = Html.mappingHtml reversedDiffResult diffResult

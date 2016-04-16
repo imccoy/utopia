@@ -1,4 +1,4 @@
-module Diff (diff, DiffTree(..), Mapping, mappingDst, mappingSrc, mappingCost, mappingChildren, ReverseMapping, reverseMappingSrc, reverseMappingDsts, reverseMappingChildren, reverseMapping) where
+module Diff (diff, DiffTree(..), Mapping, mappingDst, mappingSrc, mappingCost, mappingChildren, ReverseMapping, reverseMappingSrc, reverseMappingDsts, reverseMappingChildren, reverseMapping, zeroCostMappings) where
 
 {-
  - The algorithm here is inspired by the gumtree paper and code:
@@ -25,6 +25,7 @@ module Diff (diff, DiffTree(..), Mapping, mappingDst, mappingSrc, mappingCost, m
 import Control.Lens hiding (children)
 import Data.List
 import Data.Text (Text)
+import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Maybe
 import Safe (fromJustDef)
@@ -93,6 +94,11 @@ matchTrees src = matchTrees'
 
 diff :: DiffTree -> DiffTree -> Mapping
 diff src dst = matchTrees (SrcNode src) (DstNode dst)
+
+zeroCostMappings :: Mapping -> Map SrcNodeId DstNodeId
+zeroCostMappings mapping =  case (mapping ^. mappingCost, mapping ^. mappingSrc) of
+                              (0, Just src) -> Map.singleton (src ^. srcNodeId) (mapping ^. mappingDst . dstNodeId)
+                              _ -> Map.unions $ map zeroCostMappings (mapping ^. mappingChildren)
 
 data ReverseMapping = ReverseMapping { _reverseMappingSrc :: SrcNode
                                      , _reverseMappingDsts :: [(DstNode, Int)]

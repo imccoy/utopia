@@ -3,6 +3,7 @@
 module Data.Functor.Foldable.Extended 
   ( module Data.Functor.Foldable
   , cataM
+  , paraM
   ) where
 
 import Prelude hiding (Foldable)
@@ -19,3 +20,10 @@ cataM
   -> m a               -- ^ result
 cataM f = c where c = f <=< T.mapM c <=< (return . project)
 
+-- from http://jtobin.ca/monadic-recursion-schemes
+paraM
+  :: (Monad m, T.Traversable (Base t), Foldable t)
+  => (Base t (t, a) -> m a) -> t -> m a
+paraM alg = p where
+  p   = alg <=< traverse f . project
+  f t = liftM2 (,) (return t) (p t)
