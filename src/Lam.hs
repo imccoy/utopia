@@ -112,9 +112,9 @@ resolveExpVars =
     case v of
       VarF name -> (MonoidMap $ Map.singleton name (Set.singleton i), Map.empty)
       LamF names exp -> foldr bindName exp names
-        where bindName (Id.WithId _ (Identity name)) (unbound, bound) = case Map.lookup name $ unMonoidMap unbound of
-                                                                          Just varIds -> (MonoidMap (Map.delete name (unMonoidMap unbound)), foldr (\varId -> Map.insert varId i) bound varIds)
-                                                                          Nothing -> (unbound, bound)
+        where bindName (Id.WithId argId (Identity name)) (unbound, bound) = case Map.lookup name $ unMonoidMap unbound of
+                                                                              Just varIds -> (MonoidMap (Map.delete name (unMonoidMap unbound)), foldr (\varId -> Map.insert varId argId) bound varIds)
+                                                                              Nothing -> (unbound, bound)
       _ -> Data.Foldable.fold v
 
 bindingDiffTree :: Resolved T.Text -> BindingWithId T.Text -> DiffTree

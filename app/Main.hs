@@ -8,6 +8,7 @@ import Control.Monad.Adaptive
 import Control.Monad.Adaptive.Ref
 import qualified Data.ByteString.Lazy as LB
 import Data.IORef (IORef)
+import qualified Data.List as List
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Set (Set)
@@ -82,15 +83,14 @@ main = do
     m_bindingsWithIds <- newModBy (\bs1 bs2 -> (Set.fromList . map Id._id $ bs1) == (Set.fromList . map Id._id $ bs2)) $ inM $ pure v1bindingsWithIds
     resolved <- newMod $ Lam.resolveVars <$> readMod m_bindingsWithIds
     let ch_bindingsWithMod = mapM Eval.bindingWithMod =<< readMod m_bindingsWithIds
+    let ch_mainExp = (pure . fmap (\(_, _, exp) -> exp) . List.find (\(id, name, exp) -> name == "main")) =<< mapM Eval.flattenBinding =<< ch_bindingsWithMod
     let ch_toplevelEnv = do bindingsWithMod <- ch_bindingsWithMod
-                            assocs <- forM bindingsWithMod $ \binding -> do (\(id, name, exp) -> (id, Map.singleton name (Eval.ValExp exp))) <$> Eval.flattenBinding binding
+                            assocs <- forM bindingsWithMod $ \binding -> do (\(id, name, exp) -> (id, Eval.ValExp exp)) <$> Eval.flattenBinding binding
                             pure $ Map.fromList assocs
-    let ch_program = do toplevelEnv <- ch_toplevelEnv
-                        let [Just valCh] = [ Map.lookup "main" frame | frame <- Map.elems toplevelEnv, Map.member "main" frame ]
-                            (Eval.ValExp program) = valCh
-                         in pure program
-    eval <- newMod $ do program <- ch_program
-                        Eval.eval ch_bindingsWithMod resolved program ch_toplevelEnv []
+    eval <- newMod $ do mainExp <- ch_mainExp
+                        case mainExp of
+                          Just exp -> Eval.eval ch_bindingsWithMod resolved exp ch_toplevelEnv []
+                          Nothing -> newMod . pure . Left $ [Eval.UndefinedVar (CodeDbId "toplevel") "main"]
     inCh $ inM . putStrLn . T.pack . show =<< readMod =<< readMod eval
   
     change m_bindingsWithIds v2bindingsWithIds
@@ -102,15 +102,15 @@ main = do
     resolved <- newMod $ Lam.resolveVars <$> readMod m_bindingsWithIds
     m_bindingsWithMod <- newMod (mapM Eval.bindingWithMod =<< readMod m_bindingsWithIds)
     let ch_bindingsWithMod = readMod m_bindingsWithMod
+    let ch_mainExp = (pure . fmap (\(_, _, exp) -> exp) . List.find (\(id, name, exp) -> name == "main")) =<< mapM Eval.flattenBinding =<< ch_bindingsWithMod
     let ch_toplevelEnv = do bindingsWithMod <- ch_bindingsWithMod
-                            assocs <- forM bindingsWithMod $ \binding -> do (\(id, name, exp) -> (id, Map.singleton name (Eval.ValExp exp))) <$> Eval.flattenBinding binding
+                            assocs <- forM bindingsWithMod $ \binding -> do (\(id, name, exp) -> (id, Eval.ValExp exp)) <$> Eval.flattenBinding binding
                             pure $ Map.fromList assocs
-    let ch_program = do toplevelEnv <- ch_toplevelEnv
-                        let [Just valCh] = [ Map.lookup "main" frame | frame <- Map.elems toplevelEnv, Map.member "main" frame ]
-                            (Eval.ValExp program) = valCh
-                         in pure program
-    eval <- newMod $ do program <- ch_program
-                        Eval.eval ch_bindingsWithMod resolved program ch_toplevelEnv []
+
+    eval <- newMod $ do mainExp <- ch_mainExp
+                        case mainExp of
+                          Just exp -> Eval.eval ch_bindingsWithMod resolved exp ch_toplevelEnv []
+                          Nothing -> newMod . pure . Left $ [Eval.UndefinedVar (CodeDbId "toplevel") "main"]
     inCh $ inM . putStrLn . T.pack . show =<< readMod =<< readMod eval
   
     m_v2bindingsWithIds <- newModBy (\bs1 bs2 -> (Set.fromList . map Id._id $ bs1) == (Set.fromList . map Id._id $ bs2)) $ inM $ pure v2bindingsWithIds

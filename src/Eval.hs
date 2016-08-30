@@ -107,7 +107,7 @@ eval :: (Ref m r, Ord i)
   => Changeable m r [BindingWithMod m r i]
   -> Modifiable m r (Lam.Resolved i)
   -> ExpWithMod m r i
-  -> Changeable m r (Map i (Map T.Text (Val m r i)))
+  -> Changeable m r (Map i (Val m r i))
   -> [Val m r i]
   -> Changeable m r (Modifiable m r (Either [EvalError i] (Val m r i)))
 eval bindings resolved (Fix (Lam.ExpW (Modish expMod))) ch_env stack = newMod $ do
@@ -115,9 +115,9 @@ eval bindings resolved (Fix (Lam.ExpW (Modish expMod))) ch_env stack = newMod $ 
   case v of
     Lam.LamF args exp -> let (stackElems, stack') = splitAt (length args) stack
                              env' = do env <- ch_env
-                                       argNames <- mapM (\(Modish argMod) -> readMod argMod >>= (\(Id.WithId id (Identity name)) -> pure name)) args
-                                       let frame = Map.fromList $ zip argNames stackElems
-                                       pure $ Map.insert id frame env
+                                       argIds <- mapM (\(Modish argMod) -> readMod argMod >>= (\(Id.WithId id _) -> pure id)) args
+                                       let frame = Map.fromList $ zip argIds stackElems
+                                       pure $ Map.union env frame
                           in eval bindings resolved exp env' stack' >>= readMod
     Lam.AppF exp args -> do vals <- forM args $ \arg -> eval bindings resolved arg ch_env stack >>= readMod
                             let (errors, successes) = partitionEithers vals
@@ -136,12 +136,11 @@ eval bindings resolved (Fix (Lam.ExpW (Modish expMod))) ch_env stack = newMod $ 
     Lam.LitF (Lam.Number n) -> pure $ Right $ Number n
     Lam.LitF (Lam.Text n) -> pure $ Right $ Text n
                        
-lookupVar :: (Ord i, Ref m r) => i -> T.Text -> Modifiable m r (Lam.Resolved i) -> Changeable m r (Map i (Map T.Text (Val m r i))) -> Changeable m r (Maybe (Val m r i))
+lookupVar :: (Ord i, Ref m r) => i -> T.Text -> Modifiable m r (Lam.Resolved i) -> Changeable m r (Map i (Val m r i)) -> Changeable m r (Maybe (Val m r i))
 lookupVar id var resolvedMod ch_env = do resolved <- readMod resolvedMod
                                          env <- ch_env
-                                         pure $ do frameId <- join $ Map.lookup id resolved
-                                                   frame <- Map.lookup frameId env
-                                                   Map.lookup var frame
+                                         pure $ do varId <- join $ Map.lookup id resolved
+                                                   Map.lookup varId env
 
 primitive :: (Ref m r)
           => i
@@ -149,7 +148,7 @@ primitive :: (Ref m r)
           -> Maybe (
             Changeable m r ([BindingWithMod m r i]) ->
             (Modifiable m r (Lam.Resolved i)) ->
-            (Changeable m r (Map i (Map T.Text (Val m r i)))) ->
+            (Changeable m r (Map i (Val m r i))) ->
             [Val m r i] ->
             Changeable m r (Either [EvalError i] (Val m r i))
           )
