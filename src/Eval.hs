@@ -29,41 +29,47 @@ data InternalError i = DanglingVar i T.Text
 data EvalError i = UndefinedVar i T.Text | TypeError i T.Text | InternalError (InternalError i)
   deriving (Eq, Show)
 
-data ExpWithModF m r i v = ExpWithModF (Modifiable m r (Id.WithId i (Lam.ExpF v)))
+newtype Modish m r w v = Modish (Modifiable m r (w v))
   deriving (Eq)
 
-type ExpWithMod m r i = Fix (ExpWithModF m r i)
-type BindingWithMod m r i = Modifiable m r (Id.WithId i (Lam.Binding (ExpWithMod m r i)))
+type ExpWithMod m r i = Fix (Lam.ExpW (Modish m r (Id.WithId i Identity)))
+
+type BindingWithMod m r i = Modifiable m r (Id.WithId i Identity (Lam.Binding (ExpWithMod m r i)))
 
 expWithMod :: (Ord i, Eq i, Monad m, Ref m r) => Lam.ExpWithId i -> Changeable m r (ExpWithMod m r i)
 expWithMod = expWithModReusing Map.empty
 
+expWithModReusing' :: (Ord i, Eq i, Monad m, Ref m r) => Map i (ExpWithMod m r i) -> Lam.ExpW (Id.WithId i Identity) (ExpWithMod m r i) -> Changeable m r (ExpWithMod m r i)
+expWithModReusing' reuse (Lam.ExpW (Id.WithId i (Identity e))) = case Map.lookup i reuse of
+                                                                     Nothing -> do e' <- Lam.expChangeWM (\p -> Modish <$> (newModBy Id.withIdEq . pure) p) e
+                                                                                   v' <- newModBy Id.withIdEq $ inM $ pure $ Id.WithId i $ Identity e'
+                                                                                   pure $ Fix $ Lam.ExpW $ Modish v'
+                                                                     Just mod -> pure $ mod
+
 expWithModReusing :: (Ord i, Eq i, Monad m, Ref m r) => Map i (ExpWithMod m r i) -> Lam.ExpWithId i -> Changeable m r (ExpWithMod m r i)
-expWithModReusing reuse = cataM $ \(Lam.ExpWithIdF v@(Id.WithId i _)) -> 
-                                    case Map.lookup i reuse of
-                                      Nothing -> pure . Fix . ExpWithModF =<< (newModBy Id.withIdEq . inM . pure $ v)
-                                      Just mod -> pure $ mod
+expWithModReusing reuse = cataM (expWithModReusing' reuse)
 
 reuses :: (Ord srcNodeId, Ord dstNodeId, Ref m r) => Map srcNodeId dstNodeId -> ExpWithMod m r srcNodeId -> Changeable m r (Map dstNodeId (ExpWithMod m r srcNodeId))
 reuses zeroCostMappings = go
-  where go (Fix (ExpWithModF mod)) = do (Id.WithId srcNodeId exp) <- readMod mod
-                                        children <- Data.Foldable.fold <$> (sequence $ go <$> exp)
-                                        pure $ case Map.lookup srcNodeId zeroCostMappings of
-                                                 Just dstNodeId -> Map.insert dstNodeId (Fix (ExpWithModF mod)) children
-                                                 Nothing -> children
+  where go e@(Fix (Lam.ExpW (Modish mod))) = do (Id.WithId srcNodeId (Identity exp)) <- readMod mod
+                                                children <- Data.Foldable.fold <$> (sequence $ go <$> exp)
+                                                pure $ case Map.lookup srcNodeId zeroCostMappings of
+                                                         Just dstNodeId -> Map.insert dstNodeId e children
+                                                         Nothing -> children
+
+flattenBinding :: (Ref m r) => BindingWithMod m r i -> Changeable m r (i, Lam.Name, ExpWithMod m r i)
+flattenBinding expMod = do (Id.WithId id (Identity (Lam.Binding n exp@(Fix (Lam.ExpW _))))) <- readMod expMod
+                           pure (id, n, exp)
 
 bindingWithMod :: (Ord i, Eq i, Monad m, Ref m r) => Lam.BindingWithId i -> Changeable m r (BindingWithMod m r i)
 bindingWithMod = bindingWithModReusing Map.empty
 
-bindingWithModReusing reuse (Id.WithId i (Lam.Binding n e)) = do e' <- expWithModReusing reuse e
-                                                                 newModBy Id.withIdEq . inM . pure . (Id.WithId i) . Lam.Binding n $ e'
-
-flattenBinding :: (Ref m r) => BindingWithMod m r i -> Changeable m r (i, Lam.Name, ExpWithMod m r i)
-flattenBinding expMod = do (Id.WithId id (Lam.Binding n (Fix (ExpWithModF exp)))) <- readMod expMod
-                           pure (id, n, Fix . ExpWithModF $ exp)
+bindingWithModReusing reuse (Id.WithId i (Identity (Lam.Binding n e))) = do e' <- expWithModReusing reuse e
+                                                                            newModBy Id.withIdEq . inM . pure . (Id.WithId i) . Identity . Lam.Binding n $ e'
 
 bindingExp :: (Ref m r) => BindingWithMod m r i -> Changeable m r (ExpWithMod m r i)
-bindingExp binding = (^. _3) <$> flattenBinding binding
+bindingExp binding = do (Id.WithId _ (Identity (Lam.Binding _ exp))) <- readMod binding
+                        pure exp
 
 
 --expWithModById' :: (Eq i, Ref m r) => i -> ExpWithMod m r i -> Changeable m r (First (ExpWithMod m r i))
@@ -104,12 +110,13 @@ eval :: (Ref m r, Ord i)
   -> Changeable m r (Map i (Map T.Text (Val m r i)))
   -> [Val m r i]
   -> Changeable m r (Modifiable m r (Either [EvalError i] (Val m r i)))
-eval bindings resolved (Fix (ExpWithModF expMod)) ch_env stack = newMod $ do
-  (Id.WithId id v) <- readMod expMod 
+eval bindings resolved (Fix (Lam.ExpW (Modish expMod))) ch_env stack = newMod $ do
+  (Id.WithId id (Identity v)) <- readMod expMod 
   case v of
     Lam.LamF args exp -> let (stackElems, stack') = splitAt (length args) stack
                              env' = do env <- ch_env
-                                       let frame = Map.fromList $ zip args stackElems
+                                       argNames <- mapM (\(Modish argMod) -> readMod argMod >>= (\(Id.WithId id (Identity name)) -> pure name)) args
+                                       let frame = Map.fromList $ zip argNames stackElems
                                        pure $ Map.insert id frame env
                           in eval bindings resolved exp env' stack' >>= readMod
     Lam.AppF exp args -> do vals <- forM args $ \arg -> eval bindings resolved arg ch_env stack >>= readMod
