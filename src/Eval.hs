@@ -1,8 +1,8 @@
 {-# LANGUAGE FlexibleContexts, ScopedTypeVariables, StandaloneDeriving #-}
-module Eval where
+module Eval (Env, EvalError(..), Val(..), eval, evalVal, bindingWithMod, reuses, bindingWithModReusing, flattenBinding, bindingExp, Thunk(..)) where
 
 import Prelude hiding (id, exp)
-import Control.Lens
+import Control.Lens hiding (reuses)
 import Control.Monad
 import Control.Monad.Adaptive
 import Control.Monad.Adaptive.Ref
@@ -10,24 +10,15 @@ import Data.Either (partitionEithers)
 import qualified Data.Foldable
 import Data.Map (Map)
 import qualified Data.Map as Map
+import Data.Set (Set)
+import qualified Data.Set as Set
 import qualified Data.Text as T
 
 import Data.Functor.Foldable.Extended
 import qualified Id
 import qualified Lam
 
-data Val m r i = Text T.Text | Number Integer | ValExp (ExpWithMod m r i)
-  deriving (Eq)
-
-instance Show (Val m r i) where
-  show (Text t) = "Text " ++ T.unpack t
-  show (Number n) = "Number " ++ show n
-  show (ValExp _) = "Exp"
-
-data InternalError i = DanglingVar i T.Text
-  deriving (Eq, Show)
-data EvalError i = UndefinedVar i T.Text | TypeError i T.Text | InternalError (InternalError i)
-  deriving (Eq, Show)
+import Debug.Trace
 
 newtype Modish m r w v = Modish (Modifiable m r (w v))
   deriving (Eq)
@@ -58,7 +49,8 @@ reuses zeroCostMappings = go
                                                          Nothing -> children
 
 flattenBinding :: (Ref m r) => BindingWithMod m r i -> Changeable m r (i, Lam.Name, ExpWithMod m r i)
-flattenBinding expMod = do (Id.WithId id (Identity (Lam.Binding n exp@(Fix (Lam.ExpW _))))) <- readMod expMod
+flattenBinding expMod = do (Id.WithId _ (Identity (Lam.Binding n exp@(Fix (Lam.ExpW (Modish exp')))))) <- readMod expMod
+                           Id.WithId id _ <- readMod exp'
                            pure (id, n, exp)
 
 bindingWithMod :: (Ord i, Eq i, Monad m, Ref m r) => Lam.BindingWithId i -> Changeable m r (BindingWithMod m r i)
@@ -72,95 +64,75 @@ bindingExp binding = do (Id.WithId _ (Identity (Lam.Binding _ exp))) <- readMod 
                         pure exp
 
 
---expWithModById' :: (Eq i, Ref m r) => i -> ExpWithMod m r i -> Changeable m r (First (ExpWithMod m r i))
---expWithModById' id =
---  paraM $ \val@(ExpWithModF ch) -> do
---    Id.WithId id' expPair  <- ch
---    if id' == id
---      then inM $ pure $ First $ Just $ Fix $ ExpWithModF $ inM $ pure $ Id.WithId id' $ fst <$> expPair
---      else inM $ pure $ Data.Foldable.fold (snd <$> expPair)
+data EvalError i = UndefinedVar i T.Text | TypeError i T.Text
+  deriving (Eq, Ord, Show)
 
 
---expWithModByIdInExp :: (Eq i, Ref m r) => i -> ExpWithMod m r i -> Changeable m r (First (ExpWithMod m r i))
---expWithModByIdInExp id exp = go exp
---  where go (Fix val@(ExpWithModF ch)) = do
---          Id.WithId id' v' <- ch
---          if id' == id
---            then inM $ pure $ First $ Just $ Fix val
---            else
---              case v' of
---                Lam.LamF _ e -> go e
---                Lam.AppF e es -> mconcat <$> mapM go (e:es)
---                _ -> inM $ pure $ First Nothing
---
---expWithModByIdInBindings :: (Eq i, Ref m r) => i -> [BindingWithMod m r i] -> Changeable m r (First (ExpWithMod m r i))
---expWithModByIdInBindings id bindings = mconcat <$> mapM (expWithModByIdInBinding id) bindings
---
---expWithModByIdInBinding :: (Eq i, Ref m r) => i -> BindingWithMod m r i -> Changeable m r (First (ExpWithMod m r i))
---expWithModByIdInBinding id bindingWithMod = do
---  (Id.WithId id' (Lam.Binding _ exp)) <- bindingWithMod
---  if id == id'
---    then inM $ pure $ First $ Just exp
---    else expWithModByIdInExp id exp
+data Val m r i = Text T.Text
+               | Number Integer
+               | Thunk (Thunk m r i)
 
-eval :: (Ref m r, Ord i)
-  => Changeable m r [BindingWithMod m r i]
-  -> Modifiable m r (Lam.Resolved i)
+data Thunk m r i = ThunkFn i (Map i (Val m r i) -> Either [EvalError i] (Val m r i))
+                 | ThunkExp (ExpWithMod m r i)
+
+type Env m r i = Map i (Val m r i)
+
+instance (Eq i, EqRef r) => Eq (Thunk m r i) where
+  ThunkFn f1 _ == ThunkFn f2 _ = f1 == f2
+  ThunkExp e1 == ThunkExp e2   = e1 == e2
+
+instance Show i => Show (Thunk m r i) where
+  show (ThunkFn i _) = "thunkfn " ++ show i
+  show (ThunkExp exp) = "thunkexp"
+
+deriving instance (Eq i, EqRef r) => Eq (Val m r i)
+
+instance (Show i) => Show (Val m r i) where
+  show (Text text) = "Text " ++ T.unpack text
+  show (Number num) = "Number " ++ show num
+  show (Thunk thunk) = "Thunk " ++ show thunk
+
+
+
+eval :: (Ref m r, Ord i, Show i)
+  => Modifiable m r (Lam.Resolved i)
   -> ExpWithMod m r i
   -> Changeable m r (Map i (Val m r i))
-  -> [Val m r i]
   -> Changeable m r (Modifiable m r (Either [EvalError i] (Val m r i)))
-eval bindings resolved (Fix (Lam.ExpW (Modish expMod))) ch_env stack = newMod $ do
+eval m_resolved (Fix (Lam.ExpW (Modish expMod))) ch_env = newMod $ do
   (Id.WithId id (Identity v)) <- readMod expMod 
   case v of
-    Lam.LamF args exp -> let (stackElems, stack') = splitAt (length args) stack
-                             env' = do env <- ch_env
-                                       argIds <- mapM (\(Modish argMod) -> readMod argMod >>= (\(Id.WithId id _) -> pure id)) args
-                                       let frame = Map.fromList $ zip argIds stackElems
-                                       pure $ Map.union env frame
-                          in eval bindings resolved exp env' stack' >>= readMod
-    Lam.AppF exp args -> do vals <- forM args $ \arg -> eval bindings resolved arg ch_env stack >>= readMod
-                            let (errors, successes) = partitionEithers vals
+    Lam.LamF args exp -> readMod =<< eval m_resolved exp ch_env
+    Lam.AppF exp args -> do argVals <- forM args $ \(Modish argNameMod, arg) -> do (Id.WithId argId (Identity argName)) <- readMod argNameMod
+                                                                                   argResult <- eval m_resolved arg ch_env >>= readMod
+                                                                                   resolved <- readMod m_resolved
+                                                                                   case Map.lookup argId resolved of
+                                                                                     Just resolvedArgId -> pure $ ((resolvedArgId,) <$> argResult)
+                                                                                     Nothing -> pure $ Left [UndefinedVar argId argName]
+                            let (errors, successes) = partitionEithers argVals
                             if errors == []
-                              then eval bindings resolved exp ch_env (successes ++ stack) >>= readMod
-                              else pure $ Left $ concat errors
-    Lam.VarF var -> do lookupVar id var resolved ch_env >>= 
+                              then do let ch_env' = (Map.fromList successes `Map.union`) <$> ch_env
+                                      readMod =<< eval m_resolved exp ch_env'
+                              else pure . Left . concat $ errors
+    Lam.VarF var -> do lookupVar id var m_resolved ch_env >>= 
                          \case
-                           Nothing -> case primitive id var of
-                                        Just prim -> prim bindings resolved ch_env stack
-                                        _ -> pure $ Left [UndefinedVar id var]
-                           Just val -> do
-                             case val of
-                               ValExp exp -> eval bindings resolved exp ch_env stack >>= readMod
-                               x -> pure $ Right x
+                           Nothing -> pure $ Left [UndefinedVar id var]
+                           Just val -> evalVal m_resolved ch_env (Right val)
     Lam.LitF (Lam.Number n) -> pure $ Right $ Number n
     Lam.LitF (Lam.Text n) -> pure $ Right $ Text n
-                       
-lookupVar :: (Ord i, Ref m r) => i -> T.Text -> Modifiable m r (Lam.Resolved i) -> Changeable m r (Map i (Val m r i)) -> Changeable m r (Maybe (Val m r i))
-lookupVar id var resolvedMod ch_env = do resolved <- readMod resolvedMod
-                                         env <- ch_env
-                                         pure $ do varId <- join $ Map.lookup id resolved
-                                                   Map.lookup varId env
 
-primitive :: (Ref m r)
-          => i
-          -> T.Text
-          -> Maybe (
-            Changeable m r ([BindingWithMod m r i]) ->
-            (Modifiable m r (Lam.Resolved i)) ->
-            (Changeable m r (Map i (Val m r i))) ->
-            [Val m r i] ->
-            Changeable m r (Either [EvalError i] (Val m r i))
-          )
-primitive id "+" = Just $ \_ _ _ stack -> case valNumbers stack of
-                                            Right numbers -> pure $ Right $ Number $ sum numbers
-                                            Left (i, v) -> pure $ Left [TypeError id $ "(+) at arg " `T.append` (T.pack $ show i) `T.append` ", was " `T.append` (T.pack $ show v)]
-primitive _ _ = Nothing
-
-valNumbers :: (Ref m r) => [Val m r i] -> Either (Integer, Val m r i) [Integer]
-valNumbers vals =
-  let valNumbers = valNumber <$> zip [0..] vals
-   in sequence valNumbers
-
-valNumber (_, Number n) = Right n
-valNumber (i, v)        = Left (i, v)
+evalVal :: (Ref m r, Ord i, Show i)
+        => Modifiable m r (Lam.Resolved i)
+        -> Changeable m r (Map i (Val m r i))
+        -> Either [EvalError i] (Val m r i)
+        -> Changeable m r (Either [EvalError i] (Val m r i))
+evalVal resolved ch_env (Right (Thunk (ThunkFn _ fn))) = do env <- ch_env
+                                                            evalVal resolved ch_env (fn env)
+evalVal resolved ch_env (Right (Thunk (ThunkExp exp))) = evalVal resolved ch_env =<< (readMod =<< eval resolved exp ch_env)
+evalVal resolved env v = pure v
+                      
+lookupVar :: (Ord i, Ref m r, Show i) => i -> T.Text -> Modifiable m r (Lam.Resolved i) -> Changeable m r (Map i (Val m r i)) -> Changeable m r (Maybe (Val m r i))
+lookupVar id var m_resolved ch_env = do resolved <- readMod m_resolved
+                                        env <- ch_env
+                                        pure $ do varId <- Map.lookup id resolved
+                                                  Map.lookup varId env

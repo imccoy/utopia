@@ -7,6 +7,7 @@ import Control.Monad.Reader
 import Control.Monad.Adaptive
 import Control.Monad.Adaptive.Ref
 import qualified Data.ByteString.Lazy as LB
+import Data.Either.Combinators (eitherToError, mapLeft)
 import Data.IORef (IORef)
 import qualified Data.List as List
 import Data.Map (Map)
@@ -24,6 +25,7 @@ import System.IO (openTempFile, hClose)
 import System.Process (spawnCommand)
 import Text.Blaze.Html.Renderer.Utf8 (renderHtml)
 
+import qualified Builtins
 import qualified Code
 import CodeDb
 import qualified Diff
@@ -65,15 +67,18 @@ nextCodeDbId = do
   tailUUID <- liftIO Data.UUID.V4.nextRandom
   return $ CodeDbId $ baseUUID `T.append` "-" `T.append` UUID.toText tailUUID
 
+data Error = ParseError (Lam.NameResolutionError CodeDbId) | RuntimeError (Eval.EvalError CodeDbId)
+  deriving (Eq, Ord, Show)
+
 main :: IO ()
 main = do
   v1bindingsWithIds <- runCodeDbIdGen $ mapM (Lam.bindingWithId nextCodeDbId) Code.v1
-  let v1projection = bindingsWithIdsProjection v1bindingsWithIds
+  v1projection <- eitherToError $ mapLeft (userError . show) $ bindingsWithIdsProjection v1bindingsWithIds
   let initialDb = initFromProjection v1projection
   printProjection v1projection
 
   v2bindingsWithIds <- runCodeDbIdGen $ mapM (Lam.bindingWithId nextCodeDbId) Code.v2
-  let v2projection = bindingsWithIdsProjection v2bindingsWithIds
+  v2projection <- eitherToError $ mapLeft (userError . show) $ bindingsWithIdsProjection v2bindingsWithIds
   printProjection v2projection
 
   let (reversedDiffResult, diffResult) = diffProjection initialDb v2projection
@@ -81,37 +86,46 @@ main = do
 
   run $ do
     m_bindingsWithIds <- newModBy (\bs1 bs2 -> (Set.fromList . map Id._id $ bs1) == (Set.fromList . map Id._id $ bs2)) $ inM $ pure v1bindingsWithIds
-    resolved <- newMod $ Lam.resolveVars <$> readMod m_bindingsWithIds
+    m_resolved <- newMod $ Lam.resolveVars (Lam.GlobalNames Builtins.functionIds Builtins.allArgIds) <$> readMod m_bindingsWithIds
     let ch_bindingsWithMod = mapM Eval.bindingWithMod =<< readMod m_bindingsWithIds
     let ch_mainExp = (pure . fmap (\(_, _, exp) -> exp) . List.find (\(id, name, exp) -> name == "main")) =<< mapM Eval.flattenBinding =<< ch_bindingsWithMod
     let ch_toplevelEnv = do bindingsWithMod <- ch_bindingsWithMod
-                            assocs <- forM bindingsWithMod $ \binding -> do (\(id, name, exp) -> (id, Eval.ValExp exp)) <$> Eval.flattenBinding binding
-                            pure $ Map.fromList assocs
+                            assocs <- forM bindingsWithMod $ \binding -> do (\(id, name, exp) -> (id, Eval.Thunk $ Eval.ThunkExp exp)) <$> Eval.flattenBinding binding
+                            pure $ Map.union (Map.fromList assocs) (Builtins.env)
+   
     eval <- newMod $ do mainExp <- ch_mainExp
-                        case mainExp of
-                          Just exp -> Eval.eval ch_bindingsWithMod resolved exp ch_toplevelEnv []
-                          Nothing -> newMod . pure . Left $ [Eval.UndefinedVar (CodeDbId "toplevel") "main"]
-    inCh $ inM . putStrLn . T.pack . show =<< readMod =<< readMod eval
+                        resolved <- readMod m_resolved
+                        case (mainExp, resolved) of
+                          (Just exp, Right res)  -> do m_res <- newMod $ inM $ pure res
+                                                       evaluated <- readMod =<< Eval.eval m_res exp ch_toplevelEnv
+                                                       pure $ (_Left %~ map RuntimeError) $ evaluated
+                          (Nothing, _) -> pure . Left $ [RuntimeError $ Eval.UndefinedVar (CodeDbId "toplevel") "main"]
+                          (_, Left resolveErrors) -> pure . Left $ [ParseError resolveErrors]
+    inCh $ inM . putStrLn . T.pack . show =<< readMod eval
   
     change m_bindingsWithIds v2bindingsWithIds
     propagate
-    inCh $ inM . putStrLn . T.pack . show =<< readMod =<< readMod eval
+    inCh $ inM . putStrLn . T.pack . show =<< readMod eval
 
   run $ do
     m_bindingsWithIds <- newModBy (\bs1 bs2 -> (Set.fromList . map Id._id $ bs1) == (Set.fromList . map Id._id $ bs2)) $ inM $ pure v1bindingsWithIds
-    resolved <- newMod $ Lam.resolveVars <$> readMod m_bindingsWithIds
+    m_resolved <- newMod $ Lam.resolveVars (Lam.GlobalNames Builtins.functionIds Builtins.allArgIds) <$> readMod m_bindingsWithIds
     m_bindingsWithMod <- newMod (mapM Eval.bindingWithMod =<< readMod m_bindingsWithIds)
     let ch_bindingsWithMod = readMod m_bindingsWithMod
     let ch_mainExp = (pure . fmap (\(_, _, exp) -> exp) . List.find (\(id, name, exp) -> name == "main")) =<< mapM Eval.flattenBinding =<< ch_bindingsWithMod
     let ch_toplevelEnv = do bindingsWithMod <- ch_bindingsWithMod
-                            assocs <- forM bindingsWithMod $ \binding -> do (\(id, name, exp) -> (id, Eval.ValExp exp)) <$> Eval.flattenBinding binding
-                            pure $ Map.fromList assocs
-
+                            assocs <- forM bindingsWithMod $ \binding -> do (\(id, name, exp) -> (id, Eval.Thunk $ Eval.ThunkExp exp)) <$> Eval.flattenBinding binding
+                            pure $ Map.union (Map.fromList assocs) (Builtins.env)
     eval <- newMod $ do mainExp <- ch_mainExp
-                        case mainExp of
-                          Just exp -> Eval.eval ch_bindingsWithMod resolved exp ch_toplevelEnv []
-                          Nothing -> newMod . pure . Left $ [Eval.UndefinedVar (CodeDbId "toplevel") "main"]
-    inCh $ inM . putStrLn . T.pack . show =<< readMod =<< readMod eval
+                        resolved <- readMod m_resolved
+                        case (mainExp, resolved) of
+                          (Just exp, Right res)  -> do m_res <- newMod $ inM $ pure res
+                                                       evaluated <- readMod =<< Eval.eval m_res exp ch_toplevelEnv
+                                                       pure $ (_Left %~ map RuntimeError) $ evaluated
+                          (Nothing, _) -> pure . Left $ [RuntimeError $ Eval.UndefinedVar (CodeDbId "toplevel") "main"]
+                          (_, Left resolveErrors) -> pure . Left $ [ParseError resolveErrors]
+
+    inCh $ inM . putStrLn . T.pack . show =<< readMod eval
   
     m_v2bindingsWithIds <- newModBy (\bs1 bs2 -> (Set.fromList . map Id._id $ bs1) == (Set.fromList . map Id._id $ bs2)) $ inM $ pure v2bindingsWithIds
     let zeroCostMappings = Map.map (CodeDbId . DiffTree.dstNodeIdText) $ Map.mapKeys (CodeDbId . DiffTree.srcNodeIdText) $ Diff.zeroCostMappings diffResult
@@ -123,7 +137,7 @@ main = do
     change m_bindingsWithMod =<< inCh ch_v2bindingsWithMod
     change m_bindingsWithIds v2bindingsWithIds
     propagate
-    inCh $ inM . putStrLn . T.pack . show =<< readMod =<< readMod eval
+    inCh $ inM . putStrLn . T.pack . show =<< readMod eval
 
   
 
@@ -139,8 +153,10 @@ main = do
 projectionCodeDbIds :: ProjectionCode -> Set CodeDbId
 projectionCodeDbIds (ProjectionCode id _ children) = id `Set.insert` (Set.unions $ map projectionCodeDbIds children)
 
-bindingsWithIdsProjection :: [Lam.BindingWithId CodeDbId] -> Projection
-bindingsWithIdsProjection bindingsWithIds = mconcat $ diffTreeProjection <$> Lam.bindingDiffTrees (Lam.mapBindingId codeDbIdText <$> bindingsWithIds)
+bindingsWithIdsProjection :: [Lam.BindingWithId CodeDbId] -> Either (Lam.NameResolutionError Text) Projection
+bindingsWithIdsProjection bindingsWithIds = do
+  diffTrees <- Lam.bindingDiffTrees (Lam.GlobalNames (codeDbIdText <$> Builtins.functionIds) (codeDbIdText <$> Builtins.allArgIds)) (Lam.mapBindingId codeDbIdText <$> bindingsWithIds)
+  pure $ mconcat $ diffTreeProjection <$> diffTrees
 
 diffTreeProjection :: DiffTree.DiffTree -> Projection
 diffTreeProjection (DiffTree.DiffTree id label name children) = 
