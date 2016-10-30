@@ -101,7 +101,7 @@ eval :: (Ref m r, Ord i, Show i)
   -> Changeable m r (Modifiable m r (Either [EvalError i] (Val m r i)))
 eval m_resolved ch_env (Fix (Lam.ExpW (Modish expMod))) = newMod $ do
   (Id.WithId id (Identity v)) <- readMod expMod 
-  case v of
+  exp' <- case v of
     Lam.LamF args exp -> do env <- ch_env
                             argIds <- forM args $ \(Modish argMod) -> do (Id.WithId argId (Identity argName)) <- readMod argMod
                                                                          pure argId
@@ -115,22 +115,22 @@ eval m_resolved ch_env (Fix (Lam.ExpW (Modish expMod))) = newMod $ do
                             let (errors, successes) = partitionEithers argVals
                             if errors == []
                               then do let ch_env' = (Map.fromList successes `Map.union`) <$> ch_env
-                                      exp' <- readMod =<< eval m_resolved ch_env' exp
-                                      evalVal m_resolved ch_env' exp'
+                                      readMod =<< eval m_resolved ch_env' exp
                               else pure . Left . concat $ errors
     Lam.VarF var -> do lookupVar id var m_resolved ch_env >>= 
                          \case
                            Nothing -> pure $ Left [UndefinedVar id var]
-                           Just val -> evalVal m_resolved ch_env (Right val)
+                           Just val -> pure $ Right val
     Lam.LitF (Lam.Number n) -> pure $ Right $ Number n
     Lam.LitF (Lam.Text n) -> pure $ Right $ Text n
+  evalVal m_resolved ch_env exp'
 
 evalVal :: (Ref m r, Ord i, Show i)
         => Modifiable m r (Lam.Resolved i)
         -> Changeable m r (Map i (Val m r i))
         -> Either [EvalError i] (Val m r i)
         -> Changeable m r (Either [EvalError i] (Val m r i))
-evalVal resolved ch_env (Right (Thunk thunkArgs thunkEnv thunk)) 
+evalVal m_resolved ch_env (Right (Thunk thunkArgs thunkEnv thunk)) 
   = do env <- ch_env
        let argsInEnv = Set.intersection thunkArgs (Map.keysSet env)
        let argsRemaining = Set.difference thunkArgs argsInEnv
@@ -140,11 +140,11 @@ evalVal resolved ch_env (Right (Thunk thunkArgs thunkEnv thunk))
 
        if Set.null argsRemaining
          then case thunk of
-                ThunkFn _ fn -> evalVal resolved (pure thunkEnv') (fn thunkEnv')
-                ThunkExp exp -> evalVal resolved (pure thunkEnv') =<< (readMod =<< eval resolved (pure thunkEnv') exp)
+                ThunkFn _ fn -> evalVal m_resolved (pure thunkEnv') (fn thunkEnv')
+                ThunkExp exp -> evalVal m_resolved (pure thunkEnv') =<< (readMod =<< eval m_resolved (pure thunkEnv') exp)
          else pure $ Right $ Thunk argsRemaining thunkEnv' thunk
        
-evalVal resolved env v = pure v
+evalVal m_resolved env v = pure v
                       
 lookupVar :: (Ord i, Ref m r, Show i) => i -> T.Text -> Modifiable m r (Lam.Resolved i) -> Changeable m r (Map i (Val m r i)) -> Changeable m r (Maybe (Val m r i))
 lookupVar id var m_resolved ch_env = do resolved <- readMod m_resolved
