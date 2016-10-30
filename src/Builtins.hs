@@ -40,7 +40,7 @@ getInt i argId env = get i argId env >>= \v ->
   case v of
     (Number num) -> pure num
     (Text text) -> Left [TypeError i $ text `T.append` " is text, not a number"]
-    t@(Thunk _) -> Left [TypeError i $ (T.pack $ show t) `T.append` " is thunk, not a number"]
+    t@(Thunk _ _ _) -> Left [TypeError i $ (T.pack $ show t) `T.append` " is thunk, not a number"]
 
 plus :: Builtin m r
 plus = Builtin "+" ["+_1", "+_2"] $ \i e -> do
@@ -75,7 +75,7 @@ allArgIds = Map.fromList $ foldMap builtinArgsIds builtins
 env :: Env IO IORef CodeDbId
 env = Map.fromList 
         [ (CodeDbId $ builtinId builtin
-          , Thunk . ThunkFn (CodeDbId $ builtinId builtin)
-                           $ \env -> do (builtin ^. body) (CodeDbId (builtinId builtin)) env
+          , Thunk (argIds builtin) Map.empty . ThunkFn (CodeDbId $ builtinId builtin)
+                                                       $ \env -> do (builtin ^. body) (CodeDbId (builtinId builtin)) env
           )
         | builtin <- builtins]

@@ -90,14 +90,14 @@ main = do
     let ch_bindingsWithMod = mapM Eval.bindingWithMod =<< readMod m_bindingsWithIds
     let ch_mainExp = (pure . fmap (\(_, _, exp) -> exp) . List.find (\(id, name, exp) -> name == "main")) =<< mapM Eval.flattenBinding =<< ch_bindingsWithMod
     let ch_toplevelEnv = do bindingsWithMod <- ch_bindingsWithMod
-                            assocs <- forM bindingsWithMod $ \binding -> do (\(id, name, exp) -> (id, Eval.Thunk $ Eval.ThunkExp exp)) <$> Eval.flattenBinding binding
+                            assocs <- forM bindingsWithMod $ \binding -> do (\(id, name, exp) -> (id, Eval.Thunk Set.empty Map.empty $ Eval.ThunkExp exp)) <$> Eval.flattenBinding binding
                             pure $ Map.union (Map.fromList assocs) (Builtins.env)
    
     eval <- newMod $ do mainExp <- ch_mainExp
                         resolved <- readMod m_resolved
                         case (mainExp, resolved) of
                           (Just exp, Right res)  -> do m_res <- newMod $ inM $ pure res
-                                                       evaluated <- readMod =<< Eval.eval m_res exp ch_toplevelEnv
+                                                       evaluated <- Eval.evalVal m_res ch_toplevelEnv =<< readMod =<< Eval.eval m_res ch_toplevelEnv exp
                                                        pure $ (_Left %~ map RuntimeError) $ evaluated
                           (Nothing, _) -> pure . Left $ [RuntimeError $ Eval.UndefinedVar (CodeDbId "toplevel") "main"]
                           (_, Left resolveErrors) -> pure . Left $ [ParseError resolveErrors]
@@ -114,13 +114,13 @@ main = do
     let ch_bindingsWithMod = readMod m_bindingsWithMod
     let ch_mainExp = (pure . fmap (\(_, _, exp) -> exp) . List.find (\(id, name, exp) -> name == "main")) =<< mapM Eval.flattenBinding =<< ch_bindingsWithMod
     let ch_toplevelEnv = do bindingsWithMod <- ch_bindingsWithMod
-                            assocs <- forM bindingsWithMod $ \binding -> do (\(id, name, exp) -> (id, Eval.Thunk $ Eval.ThunkExp exp)) <$> Eval.flattenBinding binding
+                            assocs <- forM bindingsWithMod $ \binding -> do (\(id, name, exp) -> (id, Eval.Thunk Set.empty Map.empty $ Eval.ThunkExp exp)) <$> Eval.flattenBinding binding
                             pure $ Map.union (Map.fromList assocs) (Builtins.env)
     eval <- newMod $ do mainExp <- ch_mainExp
                         resolved <- readMod m_resolved
                         case (mainExp, resolved) of
                           (Just exp, Right res)  -> do m_res <- newMod $ inM $ pure res
-                                                       evaluated <- readMod =<< Eval.eval m_res exp ch_toplevelEnv
+                                                       evaluated <- Eval.evalVal m_res ch_toplevelEnv =<< readMod =<< Eval.eval m_res ch_toplevelEnv exp
                                                        pure $ (_Left %~ map RuntimeError) $ evaluated
                           (Nothing, _) -> pure . Left $ [RuntimeError $ Eval.UndefinedVar (CodeDbId "toplevel") "main"]
                           (_, Left resolveErrors) -> pure . Left $ [ParseError resolveErrors]
