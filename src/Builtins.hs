@@ -1,7 +1,6 @@
-module Builtins (functionIds, argIds, allArgIds, EvalError(..), Builtin, env) where
+module Builtins (functionIds, allArgIds, EvalError(..), Builtin, env) where
 
 import Control.Lens
-import Control.Monad.Adaptive.Ref (Ref)
 import Data.IORef
 import qualified Data.Text as T
 import qualified Data.Map as Map
@@ -54,20 +53,18 @@ builtins = [plus]
 builtinId :: Builtin m r -> Id
 builtinId builtin = "builtin-" `T.append` (builtin ^. name)
 
-argId :: Builtin m r -> ArgName -> Id
-argId builtin argName = builtinId builtin `T.append` "-" `T.append` argName
-
 
 functionIds :: Map Name CodeDbId
 functionIds = Map.fromList [(builtin ^. name, CodeDbId $ builtinId builtin) | builtin <- builtins]
 
-argIds :: Builtin m r -> Set CodeDbId
-argIds builtin = Set.fromList [CodeDbId $ argId builtin argName 
-                              | argName <- builtin ^. argNames
-                              ]
 
 builtinArgsIds :: Builtin m r -> [(Name, CodeDbId)]
 builtinArgsIds builtin = [(argName, CodeDbId $ argId builtin argName)| argName <- builtin ^. argNames]
+  where argId :: Builtin m r -> ArgName -> Id
+        argId builtin argName = builtinId builtin `T.append` "-" `T.append` argName
+
+builtinArgsIdsSet :: Builtin m r -> Set CodeDbId
+builtinArgsIdsSet = Set.fromList . map snd . builtinArgsIds
 
 allArgIds :: Map Name CodeDbId
 allArgIds = Map.fromList $ foldMap builtinArgsIds builtins
@@ -75,7 +72,7 @@ allArgIds = Map.fromList $ foldMap builtinArgsIds builtins
 env :: Env IO IORef CodeDbId
 env = Map.fromList 
         [ (CodeDbId $ builtinId builtin
-          , Thunk (argIds builtin) Map.empty . ThunkFn (CodeDbId $ builtinId builtin)
+          , Thunk (builtinArgsIdsSet builtin) Map.empty . ThunkFn (CodeDbId $ builtinId builtin)
                                                        $ \env -> do (builtin ^. body) (CodeDbId (builtinId builtin)) env
           )
         | builtin <- builtins]

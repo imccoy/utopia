@@ -97,8 +97,8 @@ main = do
                         resolved <- readMod m_resolved
                         case (mainExp, resolved) of
                           (Just exp, Right res)  -> do m_res <- newMod $ inM $ pure res
-                                                       evaluated <- Eval.evalVal m_res ch_toplevelEnv =<< readMod =<< Eval.eval m_res ch_toplevelEnv exp
-                                                       pure $ (_Left %~ map RuntimeError) $ evaluated
+                                                       evaluated <- Eval.evalAndVal m_res ch_toplevelEnv exp
+                                                       pure $ (_Left %~ map RuntimeError) $ (_Right %~ Eval.dropTrail) $ evaluated
                           (Nothing, _) -> pure . Left $ [RuntimeError $ Eval.UndefinedVar (CodeDbId "toplevel") "main"]
                           (_, Left resolveErrors) -> pure . Left $ [ParseError resolveErrors]
     inCh $ inM . putStrLn . T.pack . show =<< readMod eval
@@ -120,8 +120,8 @@ main = do
                         resolved <- readMod m_resolved
                         case (mainExp, resolved) of
                           (Just exp, Right res)  -> do m_res <- newMod $ inM $ pure res
-                                                       evaluated <- Eval.evalVal m_res ch_toplevelEnv =<< readMod =<< Eval.eval m_res ch_toplevelEnv exp
-                                                       pure $ (_Left %~ map RuntimeError) $ evaluated
+                                                       evaluated <- Eval.evalAndVal m_res ch_toplevelEnv exp
+                                                       pure $ (_Left %~ map RuntimeError) $ (_Right %~ Eval.dropTrail) $ evaluated
                           (Nothing, _) -> pure . Left $ [RuntimeError $ Eval.UndefinedVar (CodeDbId "toplevel") "main"]
                           (_, Left resolveErrors) -> pure . Left $ [ParseError resolveErrors]
 

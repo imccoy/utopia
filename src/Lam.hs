@@ -17,6 +17,8 @@ import qualified Data.Text as T
 
 import DiffTree (DiffTree(..))
 import qualified Id
+import MonoidMap (MonoidMap(..))
+import qualified MonoidMap
 
 type Name = T.Text
 
@@ -26,6 +28,7 @@ data Literal = Number Integer | Text T.Text
 data ExpF w e = LamF [w Name] e
               | AppF e [(w Name, e)]
               | VarF Name
+              | SuspendF Name [(w Name, e)]
               | LitF Literal
   deriving (Functor, Prelude.Foldable, Traversable)
 
@@ -55,6 +58,7 @@ expChangeW :: (w Name -> w' Name) -> ExpF w e -> ExpF w' e
 expChangeW f (LamF names e) = LamF (map f names) e
 expChangeW f (AppF fun args) = AppF fun (map (_1 %~ f) args)
 expChangeW _ (VarF n) = VarF n
+expChangeW f (SuspendF n args) = SuspendF n (map (_1 %~ f) args)
 expChangeW _ (LitF l) = LitF l
 
 
@@ -62,6 +66,7 @@ expChangeWM :: (Monad m) => (w Name -> m (w' Name)) -> ExpF w e -> m (ExpF w' e)
 expChangeWM f (LamF names e) = LamF <$> mapM f names <*> pure e
 expChangeWM f (AppF fun args) = AppF fun <$> mapM (_1 %%~ f) args
 expChangeWM _ (VarF n) = pure $ VarF n
+expChangeWM f (SuspendF n args) = SuspendF n <$> mapM (_1 %%~ f) args
 expChangeWM _ (LitF l) = pure $ LitF l
 
 type ExpWithId i = Fix (ExpW (Id.WithId i Identity))
@@ -92,13 +97,6 @@ expsWithIdM gen exp = cataM (expsWithIdM' gen) exp
 mapBindingId :: (i1 -> i2) -> BindingWithId i1 -> BindingWithId i2
 mapBindingId f (Id.WithId i (Identity (Binding n v))) = Id.WithId (f i) $ Identity $ Binding n $ cata go v
   where go (ExpW withId) = Fix $ ExpW $ Id.mapId f $ (expChangeW (Id.mapId f) <$> withId)
-
-newtype MonoidMap k v = MonoidMap { unMonoidMap :: Map k v }
-  deriving (Eq, Ord, Show)
-
-instance (Ord k, Monoid v) => Monoid (MonoidMap k v) where
-  mempty = MonoidMap Map.empty
-  mappend (MonoidMap a) (MonoidMap b) = MonoidMap (Map.unionWith mappend a b)
 
 type Resolved i = Map i i
 
@@ -182,24 +180,27 @@ resolveExpVars globalNames expr = go Map.empty expr
   where
     go env (Fix (ExpW (Id.WithId i (Identity e)))) = go' env i e
     go' env i (LamF names e) = go (addNamesToEnv names env) e
+      where 
+        addNamesToEnv :: [Id.WithId i Identity T.Text] -> Map Name i -> Map Name i
+        addNamesToEnv names = Map.union (Map.fromList [(name, id) | (Id.WithId id (Identity name)) <- names])
     go' env i (AppF e args) = concatExpVars $ (go env e):[lookupArg env arg | arg <- args]
-    go' env i (VarF name) = case Map.lookup name env of
-                              Just targetId -> Right $ Map.singleton i targetId
-                              Nothing -> case Map.lookup name (globalNamesTopLevelBindings globalNames) of
-                                           Just targetId -> Right $ Map.singleton i targetId
-                                           Nothing -> Left $ MonoidMap $ Map.singleton name (Set.singleton i)
+
+    go' env i (VarF name) = resolveVarName env i name
+    go' env i (SuspendF name args) = concatExpVars $ (resolveVarName env i name ):[lookupArg env arg | arg <- args]
     go' env i (LitF _) = Right $ Map.empty
 
-    addNamesToEnv :: [Id.WithId i Identity T.Text] -> Map Name i -> Map Name i
-    addNamesToEnv names = Map.union (Map.fromList [(name, id) | (Id.WithId id (Identity name)) <- names])
+    resolveVarName env i name = case Map.lookup name env of
+                                  Just targetId -> Right $ Map.singleton i targetId
+                                  Nothing -> case Map.lookup name (globalNamesTopLevelBindings globalNames) of
+                                               Just targetId -> Right $ Map.singleton i targetId
+                                               Nothing -> Left $ MonoidMap $ Map.singleton name (Set.singleton i)
 
     lookupArg env ((Id.WithId id (Identity (argName))), exp) = concatExpVars [ case Map.lookup argName (globalNamesArgs globalNames) of
-                                                                                 Just targetId -> Right $ Map.singleton id targetId
-                                                                                 Nothing -> Left $ MonoidMap $ Map.singleton argName (Set.singleton id)
-                                                                             , go env exp
-                                                                             ]
-                                                                
-                                        
+                                                                                     Just targetId -> Right $ Map.singleton id targetId
+                                                                                     Nothing -> Left $ MonoidMap $ Map.singleton argName (Set.singleton id)
+                                                                                 , go env exp
+                                                                                 ]
+
 
 bindingDiffTree :: Resolved T.Text -> BindingWithId T.Text -> DiffTree
 bindingDiffTree env (Id.WithId id (Identity (Binding name exp))) = DiffTree id "Binding" (Just name) [expDiffTree env exp]
@@ -211,29 +212,36 @@ bindingDiffTrees builtins bindings = do
 
 expDiffTree :: Resolved T.Text -> ExpWithId T.Text -> DiffTree
 expDiffTree env = cata $ \(ExpW (Id.WithId i (Identity v))) -> case v of
-  LamF args body  -> DiffTree i "Lam" Nothing $
-                                      [DiffTree argId
-                                                "LamArg"
-                                                (Just arg) 
-                                                []
-                                      | (Id.WithId argId (Identity arg)) <- args
-                                      ] ++ [body]
-  VarF name       -> DiffTree i "Var" (Just name) 
-                                      --[DiffTree (i `T.append` ".Ref")
-                                      --          "METADATA-REF"
-                                      --          (Data.Foldable.fold $ Map.lookup i env)
-                                      --          []
-                                      --]
-                                      []
-  AppF f args     -> DiffTree i "App" Nothing $
-                                      f:[DiffTree argId
-                                                  "AppArg"
-                                                  (Just arg)
-                                                  [e]
-                                        | (Id.WithId argId (Identity arg), e) <- args
-                                        ]
-  LitF (Number n) -> DiffTree i "LitNumber" (Just (T.pack $ show n)) []
-  LitF (Text t)   -> DiffTree i "LitText" (Just t) []
+  LamF args body      -> DiffTree i "Lam" Nothing $
+                                          [DiffTree argId
+                                                    "LamArg"
+                                                    (Just arg) 
+                                                    []
+                                          | (Id.WithId argId (Identity arg)) <- args
+                                          ] ++ [body]
+  VarF name           -> DiffTree i "Var" (Just name) 
+                                          --[DiffTree (i `T.append` ".Ref")
+                                          --          "METADATA-REF"
+                                          --          (Data.Foldable.fold $ Map.lookup i env)
+                                          --          []
+                                          --]
+                                          []
+  SuspendF name args -> DiffTree i "Suspend" (Just name) 
+                                             [DiffTree argId
+                                                        "SuspendArg"
+                                                        (Just arg)
+                                                        [e]
+                                             | (Id.WithId argId (Identity arg), e) <- args
+                                             ]
+  AppF f args        -> DiffTree i "App" Nothing $
+                                         f:[DiffTree argId
+                                                     "AppArg"
+                                                     (Just arg)
+                                                     [e]
+                                           | (Id.WithId argId (Identity arg), e) <- args
+                                           ]
+  LitF (Number n)    -> DiffTree i "LitNumber" (Just (T.pack $ show n)) []
+  LitF (Text t)      -> DiffTree i "LitText" (Just t) []
 
 wrap :: T.Text -> T.Text -> [DiffTree] -> DiffTree
 wrap i name exps = DiffTree i name Nothing exps
