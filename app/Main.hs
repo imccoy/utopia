@@ -70,6 +70,25 @@ nextCodeDbId = do
 data Error = ParseError (Lam.NameResolutionError CodeDbId) | RuntimeError (Eval.EvalError CodeDbId)
   deriving (Eq, Ord, Show)
 
+eval :: Modifiable IO IORef [Lam.BindingWithId CodeDbId]
+     -> Changeable IO IORef [Eval.BindingWithMod IO IORef CodeDbId]
+     -> Changeable IO IORef (Modifiable IO IORef (Either [Error] (Eval.Val IO IORef CodeDbId)))
+eval m_bindingsWithIds ch_bindingsWithMod = do
+  m_either_resolved <- newMod $ Lam.resolveVars (Lam.GlobalNames Builtins.functionIds Builtins.allArgIds) <$> readMod m_bindingsWithIds
+  let ch_mainExp = (pure . fmap (\(_, _, exp) -> exp) . List.find (\(id, name, exp) -> name == "main")) =<< mapM Eval.flattenBinding =<< ch_bindingsWithMod
+  let ch_toplevelEnv = do bindingsWithMod <- ch_bindingsWithMod
+                          assocs <- forM bindingsWithMod $ \binding -> do (\(id, name, exp) -> (id, Eval.Thunk Set.empty Map.empty $ Eval.ThunkExp exp)) <$> Eval.flattenBinding binding
+                          pure $ Map.union (Map.fromList assocs) (Builtins.env)
+  newMod $ do mainExp <- ch_mainExp
+              either_resolved <- readMod m_either_resolved
+              case (mainExp, either_resolved) of
+                (Just exp, Right resolved)  -> do m_resolved <- newMod $ inM $ pure resolved
+                                                  evaluated <- Eval.evalAndVal m_resolved ch_toplevelEnv exp
+                                                  pure $ (_Left %~ map RuntimeError) $ (_Right %~ Eval.dropTrail) $ evaluated
+                (Nothing, _) -> pure . Left $ [RuntimeError $ Eval.UndefinedVar (CodeDbId "toplevel") "main"]
+                (_, Left resolveErrors) -> pure . Left $ [ParseError resolveErrors]
+
+
 main :: IO ()
 main = do
   v1bindingsWithIds <- runCodeDbIdGen $ mapM (Lam.bindingWithId nextCodeDbId) Code.v1
@@ -86,46 +105,23 @@ main = do
 
   run $ do
     m_bindingsWithIds <- newModBy (\bs1 bs2 -> (Set.fromList . map Id._id $ bs1) == (Set.fromList . map Id._id $ bs2)) $ inM $ pure v1bindingsWithIds
-    m_resolved <- newMod $ Lam.resolveVars (Lam.GlobalNames Builtins.functionIds Builtins.allArgIds) <$> readMod m_bindingsWithIds
     let ch_bindingsWithMod = mapM Eval.bindingWithMod =<< readMod m_bindingsWithIds
-    let ch_mainExp = (pure . fmap (\(_, _, exp) -> exp) . List.find (\(id, name, exp) -> name == "main")) =<< mapM Eval.flattenBinding =<< ch_bindingsWithMod
-    let ch_toplevelEnv = do bindingsWithMod <- ch_bindingsWithMod
-                            assocs <- forM bindingsWithMod $ \binding -> do (\(id, name, exp) -> (id, Eval.Thunk Set.empty Map.empty $ Eval.ThunkExp exp)) <$> Eval.flattenBinding binding
-                            pure $ Map.union (Map.fromList assocs) (Builtins.env)
-   
-    eval <- newMod $ do mainExp <- ch_mainExp
-                        resolved <- readMod m_resolved
-                        case (mainExp, resolved) of
-                          (Just exp, Right res)  -> do m_res <- newMod $ inM $ pure res
-                                                       evaluated <- Eval.evalAndVal m_res ch_toplevelEnv exp
-                                                       pure $ (_Left %~ map RuntimeError) $ (_Right %~ Eval.dropTrail) $ evaluated
-                          (Nothing, _) -> pure . Left $ [RuntimeError $ Eval.UndefinedVar (CodeDbId "toplevel") "main"]
-                          (_, Left resolveErrors) -> pure . Left $ [ParseError resolveErrors]
-    inCh $ inM . putStrLn . T.pack . show =<< readMod eval
+
+    evaluated <- inCh $ eval m_bindingsWithIds ch_bindingsWithMod
+
+    inCh $ inM . putStrLn . T.pack . show =<< readMod evaluated
   
     change m_bindingsWithIds v2bindingsWithIds
     propagate
-    inCh $ inM . putStrLn . T.pack . show =<< readMod eval
+    inCh $ inM . putStrLn . T.pack . show =<< readMod evaluated
 
   run $ do
     m_bindingsWithIds <- newModBy (\bs1 bs2 -> (Set.fromList . map Id._id $ bs1) == (Set.fromList . map Id._id $ bs2)) $ inM $ pure v1bindingsWithIds
-    m_resolved <- newMod $ Lam.resolveVars (Lam.GlobalNames Builtins.functionIds Builtins.allArgIds) <$> readMod m_bindingsWithIds
     m_bindingsWithMod <- newMod (mapM Eval.bindingWithMod =<< readMod m_bindingsWithIds)
     let ch_bindingsWithMod = readMod m_bindingsWithMod
-    let ch_mainExp = (pure . fmap (\(_, _, exp) -> exp) . List.find (\(id, name, exp) -> name == "main")) =<< mapM Eval.flattenBinding =<< ch_bindingsWithMod
-    let ch_toplevelEnv = do bindingsWithMod <- ch_bindingsWithMod
-                            assocs <- forM bindingsWithMod $ \binding -> do (\(id, name, exp) -> (id, Eval.Thunk Set.empty Map.empty $ Eval.ThunkExp exp)) <$> Eval.flattenBinding binding
-                            pure $ Map.union (Map.fromList assocs) (Builtins.env)
-    eval <- newMod $ do mainExp <- ch_mainExp
-                        resolved <- readMod m_resolved
-                        case (mainExp, resolved) of
-                          (Just exp, Right res)  -> do m_res <- newMod $ inM $ pure res
-                                                       evaluated <- Eval.evalAndVal m_res ch_toplevelEnv exp
-                                                       pure $ (_Left %~ map RuntimeError) $ (_Right %~ Eval.dropTrail) $ evaluated
-                          (Nothing, _) -> pure . Left $ [RuntimeError $ Eval.UndefinedVar (CodeDbId "toplevel") "main"]
-                          (_, Left resolveErrors) -> pure . Left $ [ParseError resolveErrors]
+    evaluated <- inCh $ eval m_bindingsWithIds ch_bindingsWithMod
 
-    inCh $ inM . putStrLn . T.pack . show =<< readMod eval
+    inCh $ inM . putStrLn . T.pack . show =<< readMod evaluated
   
     m_v2bindingsWithIds <- newModBy (\bs1 bs2 -> (Set.fromList . map Id._id $ bs1) == (Set.fromList . map Id._id $ bs2)) $ inM $ pure v2bindingsWithIds
     let zeroCostMappings = Map.map (CodeDbId . DiffTree.dstNodeIdText) $ Map.mapKeys (CodeDbId . DiffTree.srcNodeIdText) $ Diff.zeroCostMappings diffResult
@@ -137,7 +133,7 @@ main = do
     change m_bindingsWithMod =<< inCh ch_v2bindingsWithMod
     change m_bindingsWithIds v2bindingsWithIds
     propagate
-    inCh $ inM . putStrLn . T.pack . show =<< readMod eval
+    inCh $ inM . putStrLn . T.pack . show =<< readMod evaluated
 
   
 

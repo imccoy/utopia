@@ -1,5 +1,5 @@
 {-# LANGUAGE FlexibleContexts, ScopedTypeVariables, StandaloneDeriving #-}
-module Eval (Env, EvalError(..), Val(..), eval, evalVal, evalAndVal, bindingWithMod, reuses, bindingWithModReusing, flattenBinding, bindingExp, Thunk(..), dropTrail) where
+module Eval (Env, EvalError(..), Val(..), BindingWithMod, eval, evalVal, evalAndVal, bindingWithMod, reuses, bindingWithModReusing, flattenBinding, bindingExp, Thunk(..), dropTrail) where
 
 import Prelude hiding (id, exp)
 import Control.Lens hiding (reuses)
