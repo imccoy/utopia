@@ -70,10 +70,11 @@ nextCodeDbId = do
 data Error = ParseError (Lam.NameResolutionError CodeDbId) | RuntimeError (Eval.EvalError CodeDbId)
   deriving (Eq, Ord, Show)
 
-eval :: Modifiable IO IORef [Lam.BindingWithId CodeDbId]
-     -> Changeable IO IORef [Eval.BindingWithMod IO IORef CodeDbId]
-     -> Changeable IO IORef (Modifiable IO IORef (Either [Error] (Eval.Val IO IORef CodeDbId)))
-eval m_bindingsWithIds ch_bindingsWithMod = do
+evalWithTrail :: Modifiable IO IORef [Lam.BindingWithId CodeDbId]
+              -> Changeable IO IORef [Eval.BindingWithMod IO IORef CodeDbId]
+              -> Modifiable IO IORef (Eval.Trail IO IORef CodeDbId)
+              -> Changeable IO IORef (Modifiable IO IORef (Either [Error] (Eval.Trailing IO IORef CodeDbId (Eval.Val IO IORef CodeDbId))))
+evalWithTrail m_bindingsWithIds ch_bindingsWithMod m_trail = do
   m_either_resolved <- newMod $ Lam.resolveVars (Lam.GlobalNames Builtins.functionIds Builtins.allArgIds) <$> readMod m_bindingsWithIds
   let ch_mainExp = (pure . fmap (\(_, _, exp) -> exp) . List.find (\(id, name, exp) -> name == "main")) =<< mapM Eval.flattenBinding =<< ch_bindingsWithMod
   let ch_toplevelEnv = do bindingsWithMod <- ch_bindingsWithMod
@@ -83,11 +84,32 @@ eval m_bindingsWithIds ch_bindingsWithMod = do
               either_resolved <- readMod m_either_resolved
               case (mainExp, either_resolved) of
                 (Just exp, Right resolved)  -> do m_resolved <- newMod $ inM $ pure resolved
-                                                  evaluated <- Eval.evalAndVal m_resolved ch_toplevelEnv exp
-                                                  pure $ (_Left %~ map RuntimeError) $ (_Right %~ Eval.dropTrail) $ evaluated
+                                                  evaluated <- Eval.evalAndVal m_resolved ch_toplevelEnv m_trail exp
+                                                  pure $ (_Left %~ map RuntimeError) $ evaluated
                 (Nothing, _) -> pure . Left $ [RuntimeError $ Eval.UndefinedVar (CodeDbId "toplevel") "main"]
                 (_, Left resolveErrors) -> pure . Left $ [ParseError resolveErrors]
 
+eval :: Modifiable IO IORef [Lam.BindingWithId CodeDbId]
+     -> Changeable IO IORef [Eval.BindingWithMod IO IORef CodeDbId]
+     -> Adaptive IO IORef (Either [Error] (Eval.Val IO IORef CodeDbId))
+eval m_bindingsWithIds ch_bindingsWithMod = do
+  trail <- newMod (pure mempty)
+  evalResult <- inCh (evalWithTrail m_bindingsWithIds ch_bindingsWithMod trail)
+  iterateTrail trail evalResult
+
+
+iterateTrail :: Modifiable IO IORef (Eval.Trail IO IORef CodeDbId)
+             -> Modifiable IO IORef (Either [Error] (Eval.Trailing IO IORef CodeDbId (Eval.Val IO IORef CodeDbId)))
+             -> Adaptive IO IORef (Either [Error] (Eval.Val IO IORef CodeDbId))
+iterateTrail m_trail m_evalResult = do
+  inCh (readMod m_evalResult) >>= \case
+    Right (Eval.Trailing newTrail result) -> do trail1 <- inCh (readMod m_trail)
+                                                if trail1 == newTrail
+                                                  then pure $ Right result
+                                                  else do change m_trail newTrail
+                                                          propagate
+                                                          iterateTrail m_trail m_evalResult
+    Left e -> pure $ Left e
 
 main :: IO ()
 main = do
@@ -107,21 +129,21 @@ main = do
     m_bindingsWithIds <- newModBy (\bs1 bs2 -> (Set.fromList . map Id._id $ bs1) == (Set.fromList . map Id._id $ bs2)) $ inM $ pure v1bindingsWithIds
     let ch_bindingsWithMod = mapM Eval.bindingWithMod =<< readMod m_bindingsWithIds
 
-    evaluated <- inCh $ eval m_bindingsWithIds ch_bindingsWithMod
+    let ch_evaluated = eval m_bindingsWithIds ch_bindingsWithMod
 
-    inCh $ inM . putStrLn . T.pack . show =<< readMod evaluated
+    inM . putStrLn . T.pack . show =<< ch_evaluated
   
     change m_bindingsWithIds v2bindingsWithIds
     propagate
-    inCh $ inM . putStrLn . T.pack . show =<< readMod evaluated
+    inM . putStrLn . T.pack . show =<< ch_evaluated
 
   run $ do
     m_bindingsWithIds <- newModBy (\bs1 bs2 -> (Set.fromList . map Id._id $ bs1) == (Set.fromList . map Id._id $ bs2)) $ inM $ pure v1bindingsWithIds
     m_bindingsWithMod <- newMod (mapM Eval.bindingWithMod =<< readMod m_bindingsWithIds)
     let ch_bindingsWithMod = readMod m_bindingsWithMod
-    evaluated <- inCh $ eval m_bindingsWithIds ch_bindingsWithMod
+    let ch_evaluated = eval m_bindingsWithIds ch_bindingsWithMod
 
-    inCh $ inM . putStrLn . T.pack . show =<< readMod evaluated
+    inM . putStrLn . T.pack . show =<< ch_evaluated
   
     m_v2bindingsWithIds <- newModBy (\bs1 bs2 -> (Set.fromList . map Id._id $ bs1) == (Set.fromList . map Id._id $ bs2)) $ inM $ pure v2bindingsWithIds
     let zeroCostMappings = Map.map (CodeDbId . DiffTree.dstNodeIdText) $ Map.mapKeys (CodeDbId . DiffTree.srcNodeIdText) $ Diff.zeroCostMappings diffResult
@@ -133,7 +155,7 @@ main = do
     change m_bindingsWithMod =<< inCh ch_v2bindingsWithMod
     change m_bindingsWithIds v2bindingsWithIds
     propagate
-    inCh $ inM . putStrLn . T.pack . show =<< readMod evaluated
+    inM . putStrLn . T.pack . show =<< ch_evaluated
 
   
 

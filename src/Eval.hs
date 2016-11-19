@@ -1,5 +1,5 @@
 {-# LANGUAGE FlexibleContexts, ScopedTypeVariables, StandaloneDeriving #-}
-module Eval (Env, EvalError(..), Val(..), BindingWithMod, eval, evalVal, evalAndVal, bindingWithMod, reuses, bindingWithModReusing, flattenBinding, bindingExp, Thunk(..), dropTrail) where
+module Eval where
 
 import Prelude hiding (id, exp)
 import Control.Lens hiding (reuses)
@@ -131,9 +131,10 @@ withEitherTrail f (Right (Trailing t1 v1)) = do f (Right v1) >>= \case
 eval :: (Ref m r, Ord i, Show i)
   => Modifiable m r (Lam.Resolved i)
   -> Changeable m r (Map i (Val m r i))
+  -> Modifiable m r (Trail m r i)
   -> ExpWithMod m r i
   -> Changeable m r (Modifiable m r (Either [EvalError i] (Trailing m r i (Val m r i))))
-eval m_resolved ch_env (Fix (Lam.ExpW (Modish expMod))) = newMod $ do
+eval m_resolved ch_env m_trail (Fix (Lam.ExpW (Modish expMod))) = newMod $ do
   (Id.WithId id (Identity v)) <- readMod expMod 
   exp' <- case v of
     Lam.LamF args exp -> do env <- ch_env
@@ -141,49 +142,59 @@ eval m_resolved ch_env (Fix (Lam.ExpW (Modish expMod))) = newMod $ do
                                                                          pure argId
                             pure $ Right $ noTrail $ Thunk (Set.fromList argIds) env (ThunkExp exp)
 
-    Lam.AppF exp args -> do argVals <- forM args $ \(Modish argNameMod, arg) -> do (Id.WithId argId (Identity argName)) <- readMod argNameMod
-                                                                                   argResult <- eval m_resolved ch_env arg >>= readMod
-                                                                                   resolved <- readMod m_resolved
-                                                                                   case Map.lookup argId resolved of
-                                                                                     Just resolvedArgId -> pure (fmap (resolvedArgId,) <$> argResult)
-                                                                                     Nothing -> pure $ Left [UndefinedVar argId argName]
-                            let (errors, successesList) = partitionEithers argVals
-                            if errors == []
-                              then do let successesMap = Map.fromList <$> sequenceA successesList
-                                      env <- ch_env
-                                      let Trailing argsTrail env' = ((`Map.union` env)) <$> successesMap
-                                      fmap (\(Trailing expTrail val) -> Trailing (argsTrail `mappend` expTrail) val) <$> (readMod =<< eval m_resolved (pure env') exp)
-                              else pure . Left . concat $ errors
+    Lam.AppF exp args -> do argsEnv <- evalArgs m_resolved ch_env m_trail args
+                            case argsEnv of
+                              Right successesMap -> do env <- ch_env
+                                                       let Trailing argsTrail env' = ((`Map.union` env)) <$> successesMap
+                                                       fmap (\(Trailing expTrail val) -> Trailing (argsTrail `mappend` expTrail) val) <$> (readMod =<< eval m_resolved (pure env') m_trail exp)
+                              Left e -> pure . Left $ e
 
     Lam.VarF var -> do lookupVar id var m_resolved ch_env >>= 
                          \case
                            Nothing -> pure $ Left [UndefinedVar id var]
                            Just val -> pure $ Right $ noTrail val
---    Lam.SuspendF var args -> do resolved <- readMod m_resolved
---                                case Map.lookup id resolved of
---                                  Nothing -> pure $ Left [UndefinedVar id var]
---                                  Just resolvedId -> do argsEnv <- evalArgs m_resolved ch_env args
---                                                        pure $ (Suspension resolvedId <$> argsEnv)
---
+
+    Lam.SuspendF var args -> do resolved <- readMod m_resolved
+                                case Map.lookup id resolved of
+                                  Nothing -> pure $ Left [UndefinedVar id var]
+                                  Just resolvedId -> do argsEnv <- evalArgs m_resolved ch_env m_trail args
+                                                        -- noTrail . dropTrail is pretty weird! But since we're evaluating things to specify a suspension, we're kind of not in the real world maybe? Perhaps these shouldn't be expressions in their own right, but references to expressions in the tree that are fully legit? That way there wouldn't be this weird case where expressions don't leave a trail. We don't have a good 'syntax' for referring to expressions like that though.
+                                                        pure $ (noTrail . Suspension resolvedId . dropTrail <$> argsEnv)
+
     Lam.LitF (Lam.Number n) -> pure $ Right $ noTrail $ Number n
     Lam.LitF (Lam.Text n) -> pure $ Right $ noTrail $ Text n
-  --evalVal m_resolved ch_env exp' >>= \case
-  --                                      Right (Trailing trail2 val) -> pure $ Right $ Trailing (trail1 `mappend` trail2) val
-  --                                      Left l -> pure l
-  --evalVal m_resolved ch_env <$> exp'
   case exp' of
-    Right (Trailing trail1 exp'') -> evalVal m_resolved ch_env (Right exp'') >>= \case
-                                                                                   Right (Trailing trail2 val) -> pure $ Right $ Trailing (trail1 `mappend` trail2) val
-                                                                                   Left l -> pure $ Left l
+    Right (Trailing trail1 exp'') -> evalVal m_resolved ch_env m_trail (Right exp'') >>= \case
+                                                                                               Right (Trailing trail2 val) -> pure $ Right $ Trailing (trail1 `mappend` trail2) val
+                                                                                               Left l -> pure $ Left l
     Left l -> pure $ Left l
+
+evalArgs :: (Ref m r, Ord i, Show i)
+         => Modifiable m r (Lam.Resolved i)
+         -> Changeable m r (Map i (Val m r i))
+         -> Modifiable m r (Trail m r i)
+         -> [(Modish m r (Id.WithId i Identity) Lam.Name, Fix (Lam.ExpW (Modish m r (Id.WithId i Identity))))]
+         -> Changeable m r (Either [EvalError i] (Trailing m r i (Map i (Val m r i))))           
+evalArgs m_resolved ch_env m_trail args = do argVals <- forM args $ \(Modish argNameMod, arg) -> do (Id.WithId argId (Identity argName)) <- readMod argNameMod
+                                                                                                    argResult <- eval m_resolved ch_env m_trail arg >>= readMod
+                                                                                                    resolved <- readMod m_resolved
+                                                                                                    case Map.lookup argId resolved of
+                                                                                                      Just resolvedArgId -> pure (fmap (resolvedArgId,) <$> argResult)
+                                                                                                      Nothing -> pure $ Left [UndefinedVar argId argName]
+                                             let (errors, successesList) = partitionEithers argVals
+                                             if errors == []
+                                               then pure . Right $ Map.fromList <$> sequenceA successesList
+                                               else pure . Left . concat $ errors
+         
 
 
 evalVal :: (Ref m r, Ord i, Show i)
         => Modifiable m r (Lam.Resolved i)
         -> Changeable m r (Map i (Val m r i))
+        -> Modifiable m r (Trail m r i)
         -> Either [EvalError i] (Val m r i)
         -> Changeable m r (Either [EvalError i] (Trailing m r i (Val m r i)))
-evalVal m_resolved ch_env (Right (Thunk thunkArgs thunkEnv thunk)) 
+evalVal m_resolved ch_env m_trail (Right (Thunk thunkArgs thunkEnv thunk)) 
   = do env <- ch_env
        let argsInEnv = Set.intersection thunkArgs (Map.keysSet env)
        let argsRemaining = Set.difference thunkArgs argsInEnv
@@ -193,23 +204,15 @@ evalVal m_resolved ch_env (Right (Thunk thunkArgs thunkEnv thunk))
 
        if Set.null argsRemaining
          then case thunk of
-                ThunkFn _ fn -> evalVal m_resolved (pure thunkEnv') (fn thunkEnv')
-                --ThunkExp exp -> eval m_resolved (pure thunkEnv') exp 
-                --                  >>= readMod 
-                --                  >>= \case
-                --                        Left e -> pure $ Left e
-                --                        Right (Trailing trail1 val) -> evalVal m_resolved (pure thunkEnv') (Right val)
-                --                                                         >>= \case
-                --                                                           Left e -> pure $ Left e
-                --                                                           Right (Trailing trail2 result) -> pure $ Right $ Trailing (trail1 `mappend` trail2) result
-                ThunkExp exp -> evalAndVal m_resolved (pure thunkEnv') exp
+                ThunkFn _ fn -> evalVal m_resolved (pure thunkEnv') m_trail (fn thunkEnv')
+                ThunkExp exp -> evalAndVal m_resolved (pure thunkEnv') m_trail exp
           else pure $ Right $ noTrail $ Thunk argsRemaining thunkEnv' thunk
        
-evalVal m_resolved env v = pure $ noTrail <$> v
+evalVal m_resolved ch_env _ v = pure $ noTrail <$> v
 
-evalAndVal m_resolved ch_env exp = eval m_resolved ch_env exp 
-                                     >>= readMod 
-                                     >>= withEitherTrail (evalVal m_resolved ch_env)
+evalAndVal m_resolved ch_env m_trail exp = eval m_resolved ch_env m_trail exp 
+                                             >>= readMod 
+                                             >>= withEitherTrail (evalVal m_resolved ch_env m_trail)
 
                       
 lookupVar :: (Ord i, Ref m r, Show i) => i -> T.Text -> Modifiable m r (Lam.Resolved i) -> Changeable m r (Map i (Val m r i)) -> Changeable m r (Maybe (Val m r i))
