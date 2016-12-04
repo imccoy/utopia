@@ -10,6 +10,7 @@ import Data.Set (Set)
 
 import Eval (Env, Val(..), EvalError(..), Thunk(..))
 import CodeDb (CodeDbId (..))
+import qualified Prim
 
 type Name = T.Text
 type ArgName = T.Text
@@ -21,14 +22,6 @@ data Builtin m r = Builtin { _name :: Name
                            }
 makeLenses ''Builtin
 
---plus = builtin "+" $ do
---         arg1 <- arg "1"
---         arg2 <- arg "2"
---         pure $ 
---           a <- askInt arg1
---           b <- askInt arg2
---           pure $ a + b
-
 get :: CodeDbId -> T.Text -> Env m r CodeDbId -> Either [EvalError CodeDbId] (Val m r CodeDbId)
 get i argId env = case Map.lookup (CodeDbId argId) env of
                     Just v -> Right v
@@ -37,15 +30,23 @@ get i argId env = case Map.lookup (CodeDbId argId) env of
 getInt :: CodeDbId -> T.Text -> Env m r CodeDbId -> Either [EvalError CodeDbId] Integer
 getInt i argId env = get i argId env >>= \v ->
   case v of
-    (Number num) -> pure num
-    (Text text) -> Left [TypeError i $ text `T.append` " is text, not a number"]
+    (Primitive (Prim.Number num)) -> pure num
+    (Primitive p) -> Left [TypeError i $ T.pack $ show p ++ " is not a number"]
     t@(Thunk _ _ _) -> Left [TypeError i $ (T.pack $ show t) `T.append` " is thunk, not a number"]
 
+-- this could be:
+--plus = builtin "+" $ do
+--         arg1 <- arg "1"
+--         arg2 <- arg "2"
+--         pure $ 
+--           a <- askInt arg1
+--           b <- askInt arg2
+--           pure $ a + b
 plus :: Builtin m r
 plus = Builtin "+" ["+_1", "+_2"] $ \i e -> do
   n <- getInt i "builtin-+-+_1" e
   m <- getInt i "builtin-+-+_2" e
-  pure $ Number $ n + m
+  pure $ Primitive $ Prim.Number $ n + m
 
 builtins :: [Builtin m r]
 builtins = [plus]

@@ -19,6 +19,7 @@ import qualified Id
 import qualified Lam
 import MonoidMap (MonoidMap(..))
 import qualified MonoidMap
+import qualified Prim
 
 import Debug.Trace
 
@@ -70,8 +71,7 @@ data EvalError i = UndefinedVar i T.Text | TypeError i T.Text
   deriving (Eq, Ord, Show)
 
 
-data Val m r i = Text T.Text
-               | Number Integer
+data Val m r i = Primitive Prim.Prim
                | Thunk (Set i) (Env m r i) (Thunk m r i)
                | Suspension i (Map i (Val m r i))
 
@@ -91,8 +91,7 @@ instance Show i => Show (Thunk m r i) where
 deriving instance (Eq i, EqRef r) => Eq (Val m r i)
 
 instance (Show i) => Show (Val m r i) where
-  show (Text text) = "Text " ++ T.unpack text
-  show (Number num) = "Number " ++ show num
+  show (Primitive p) = "Prim " ++ show p
   show (Thunk _ _ thunk) = "Thunk " ++ show thunk
 
 type TrailElement m r i = (Env m r i, Val m r i)
@@ -105,7 +104,6 @@ printTrail = mapM_ printTrailElems . Map.assocs . unMonoidMap
                                                mapM_ printTrailElem elems
         printTrailElem (env, val) = do putStrLn ("  " ++ show val)
                                        mapM_ (\(name, v) -> putStrLn ("    " ++ show name ++ " " ++ show v)) $ Map.assocs env 
-
 
 
 data Trailing m r i a = Trailing (Trail m r i) a
@@ -171,8 +169,8 @@ eval m_resolved ch_env m_trail (Fix (Lam.ExpW (Modish expMod))) = newMod $ do
                                                         -- noTrail . dropTrail is pretty weird! But since we're evaluating things to specify a suspension, we're kind of not in the real world maybe? Perhaps these shouldn't be expressions in their own right, but references to expressions in the tree that are fully legit? That way there wouldn't be this weird case where expressions don't leave a trail. We don't have a good 'syntax' for referring to expressions like that though.
                                                         pure $ (noTrail . Suspension resolvedId . dropTrail <$> argsEnv)
 
-    Lam.LitF (Lam.Number n) -> pure $ Right $ noTrail $ Number n
-    Lam.LitF (Lam.Text n) -> pure $ Right $ noTrail $ Text n
+    Lam.LitF (Lam.Number n) -> pure $ Right $ noTrail $ Primitive $ Prim.Number n
+    Lam.LitF (Lam.Text n) -> pure $ Right $ noTrail $ Primitive $ Prim.Text n
   case exp' of
     Right (Trailing trail1 exp'') -> evalVal m_resolved ch_env m_trail (Right exp'') >>= \case
                                                                                                Right (Trailing trail2 val) -> pure $ Right $ Trailing (trail1 `mappend` trail2) val
