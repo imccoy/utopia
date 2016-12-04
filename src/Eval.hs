@@ -98,6 +98,16 @@ instance (Show i) => Show (Val m r i) where
 type TrailElement m r i = (Env m r i, Val m r i)
 type Trail m r i = MonoidMap i [TrailElement m r i]
 
+
+printTrail :: (Show i) => Eval.Trail m r i -> IO ()
+printTrail = mapM_ printTrailElems . Map.assocs . unMonoidMap 
+  where printTrailElems (codeDbId, elems) = do putStrLn (show codeDbId)
+                                               mapM_ printTrailElem elems
+        printTrailElem (env, val) = do putStrLn ("  " ++ show val)
+                                       mapM_ (\(name, v) -> putStrLn ("    " ++ show name ++ " " ++ show v)) $ Map.assocs env 
+
+
+
 data Trailing m r i a = Trailing (Trail m r i) a
 
 instance (Ref m r, Ord i, Monoid a) => Monoid (Trailing m r i a) where
@@ -146,7 +156,7 @@ eval m_resolved ch_env m_trail (Fix (Lam.ExpW (Modish expMod))) = newMod $ do
                             case argsEnv of
                               Right successesMap -> do env <- ch_env
                                                        let Trailing argsTrail env' = ((`Map.union` env)) <$> successesMap
-                                                       fmap (\(Trailing expTrail val) -> Trailing (argsTrail `mappend` expTrail) val) <$> (readMod =<< eval m_resolved (pure env') m_trail exp)
+                                                       fmap (\(Trailing expTrail val) -> Trailing (argsTrail `mappend` expTrail `mappend` (MonoidMap.singleton id [(env', val)])) val) <$> (readMod =<< eval m_resolved (pure env') m_trail exp)
                               Left e -> pure . Left $ e
 
     Lam.VarF var -> do lookupVar id var m_resolved ch_env >>= 

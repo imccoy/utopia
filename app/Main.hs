@@ -97,7 +97,6 @@ eval m_bindingsWithIds ch_bindingsWithMod = do
   evalResult <- inCh (evalWithTrail m_bindingsWithIds ch_bindingsWithMod trail)
   iterateTrail trail evalResult
 
-
 iterateTrail :: Modifiable IO IORef (Eval.Trail IO IORef CodeDbId)
              -> Modifiable IO IORef (Either [Error] (Eval.Trailing IO IORef CodeDbId (Eval.Val IO IORef CodeDbId)))
              -> Adaptive IO IORef (Either [Error] (Eval.Val IO IORef CodeDbId))
@@ -105,7 +104,8 @@ iterateTrail m_trail m_evalResult = do
   inCh (readMod m_evalResult) >>= \case
     Right (Eval.Trailing newTrail result) -> do trail1 <- inCh (readMod m_trail)
                                                 if trail1 == newTrail
-                                                  then pure $ Right result
+                                                  then do inM $ Eval.printTrail newTrail
+                                                          pure $ Right result
                                                   else do change m_trail newTrail
                                                           propagate
                                                           iterateTrail m_trail m_evalResult
