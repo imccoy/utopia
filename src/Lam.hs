@@ -32,6 +32,8 @@ data ExpF w e = LamF [w Name] e
               | LitF Literal
   deriving (Functor, Prelude.Foldable, Traversable)
 
+deriving instance (Show e, Show (w e), Show (w Name)) => Show (ExpF w e)
+
 data Binding e = Binding Name e
   deriving (Functor, Show)
 
@@ -39,7 +41,10 @@ newtype ExpW w e = ExpW (w (ExpF w e))
   deriving (Functor, Prelude.Foldable, Traversable)
 type Exp = Fix (ExpW Identity)
 
+
 deriving instance (Eq (w e), Eq (w (ExpF w e))) => Eq (ExpW w e)
+
+deriving instance (Show (w e), Show (w (ExpF w e))) => Show (ExpW w e)
 
 lam :: [T.Text] -> Exp -> Exp
 lam args body = Fix $ ExpW $ pure $ LamF (pure <$> args) body
@@ -52,6 +57,9 @@ var name = Fix $ ExpW $ pure $ VarF name
 
 lit :: Literal -> Exp
 lit literal = Fix $ ExpW $ pure $ LitF literal
+
+suspend :: Name -> [(T.Text, Exp)] -> Exp
+suspend name args = Fix $ ExpW $ pure $ SuspendF name (traverse . _1 %~ (\name -> pure name) $ args)
 
 --expChangeW :: (w a -> w' a) -> ExpF w e -> ExpF w' e
 expChangeW :: (w Name -> w' Name) -> ExpF w e -> ExpF w' e

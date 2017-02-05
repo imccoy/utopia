@@ -74,25 +74,57 @@ data EvalError i = UndefinedVar i T.Text | TypeError i T.Text
 data Val m r i = Primitive Prim.Prim
                | Thunk (Set i) (Env m r i) (Thunk m r i)
                | Suspension i (Map i (Val m r i))
+               | ValFrame i (Map i (Val m r i)) (Val m r i)
+               | ValList [Val m r i]
 
 data Thunk m r i = ThunkFn i (Map i (Val m r i) -> Either [EvalError i] (Val m r i))
-                 | ThunkExp (ExpWithMod m r i)
+                 | ThunkEvalFn i (Map i (Val m r i) -> (Val m r i -> Changeable m r (Either [EvalError i] (Trailing m r i (Val m r i)))) -> Changeable m r (Either [EvalError i] (Trailing m r i (Val m r i))))
+                 | ThunkTrailFn i (Trail m r i -> Map i (Val m r i) -> Either [EvalError i] (Val m r i))
+                 | ThunkExp i (ExpWithMod m r i)
 
 type Env m r i = Map i (Val m r i)
 
 instance (Eq i, EqRef r) => Eq (Thunk m r i) where
-  ThunkFn f1 _ == ThunkFn f2 _ = f1 == f2
-  ThunkExp e1 == ThunkExp e2   = e1 == e2
+  ThunkFn f1 _ == ThunkFn f2 _           = f1 == f2
+  ThunkTrailFn f1 _ == ThunkTrailFn f2 _ = f1 == f2
+  ThunkEvalFn f1 _ == ThunkEvalFn f2 _ = f1 == f2
+  ThunkExp _ e1 == ThunkExp _ e2         = e1 == e2
+  _ == _                                 = False
 
 instance Show i => Show (Thunk m r i) where
   show (ThunkFn i _) = "thunkfn " ++ show i
-  show (ThunkExp exp) = "thunkexp"
+  show (ThunkTrailFn i _) = "thunktrailfn " ++ show i
+  show (ThunkEvalFn i _) = "thunkevalfn " ++ show i
+  show (ThunkExp i exp) = "thunkexp " ++ show i
 
 deriving instance (Eq i, EqRef r) => Eq (Val m r i)
 
-instance (Show i) => Show (Val m r i) where
-  show (Primitive p) = "Prim " ++ show p
-  show (Thunk _ _ thunk) = "Thunk " ++ show thunk
+deriving instance (Show i) => Show (Val m r i)
+
+pprintVal :: Show i => Val m r i -> String
+pprintVal = unlines . go 0
+  where
+    put indent s = [replicate indent ' ' ++ s]
+    go indent (Primitive p) = put indent ("Primitive " ++ show p)
+    go indent (Thunk needed _ t) = concat [ put indent ("Thunk " ++ show t)
+                                          , put (indent + 2) "needs"
+                                          , concat $ (put (indent + 4) . show) <$> Set.toList needed
+                                          ]
+    go indent (Suspension _ _) = put indent ("Suspension")
+    go indent (ValFrame i env result) = concat [ put indent ("ValFrame " ++ show i)
+                                               , go (indent + 2) result
+                                               , put (indent + 2) "ValFrameEnv"
+                                               , concat [ concat [ put (indent + 4) "ValFrameEnvElem"
+                                                                 , put (indent + 6) (show k)
+                                                                 , go (indent + 8) v
+                                                                 ]
+                                                        | (k, v) <- Map.assocs env
+                                                        ]
+                                               ]
+    go indent (ValList elems) = concat [ put indent "ValList"
+                                       , concat $ go (indent + 2) <$> elems
+                                       ]
+
 
 type TrailElement m r i = (Env m r i, Val m r i)
 type Trail m r i = MonoidMap i [TrailElement m r i]
@@ -148,13 +180,13 @@ eval m_resolved ch_env m_trail (Fix (Lam.ExpW (Modish expMod))) = newMod $ do
     Lam.LamF args exp -> do env <- ch_env
                             argIds <- forM args $ \(Modish argMod) -> do (Id.WithId argId (Identity argName)) <- readMod argMod
                                                                          pure argId
-                            pure $ Right $ noTrail $ Thunk (Set.fromList argIds) env (ThunkExp exp)
+                            pure $ Right $ noTrail $ Thunk (Set.fromList argIds) env (ThunkExp id exp)
 
     Lam.AppF exp args -> do argsEnv <- evalArgs m_resolved ch_env m_trail args
                             case argsEnv of
                               Right successesMap -> do env <- ch_env
                                                        let Trailing argsTrail env' = ((`Map.union` env)) <$> successesMap
-                                                       fmap (\(Trailing expTrail val) -> Trailing (argsTrail `mappend` expTrail `mappend` (MonoidMap.singleton id [(env', val)])) val) <$> (readMod =<< eval m_resolved (pure env') m_trail exp)
+                                                       fmap (\(Trailing expTrail val) -> Trailing (argsTrail `mappend` expTrail) val) <$> (readMod =<< eval m_resolved (pure env') m_trail exp)
                               Left e -> pure . Left $ e
 
     Lam.VarF var -> do lookupVar id var m_resolved ch_env >>= 
@@ -171,11 +203,7 @@ eval m_resolved ch_env m_trail (Fix (Lam.ExpW (Modish expMod))) = newMod $ do
 
     Lam.LitF (Lam.Number n) -> pure $ Right $ noTrail $ Primitive $ Prim.Number n
     Lam.LitF (Lam.Text n) -> pure $ Right $ noTrail $ Primitive $ Prim.Text n
-  case exp' of
-    Right (Trailing trail1 exp'') -> evalVal m_resolved ch_env m_trail (Right exp'') >>= \case
-                                                                                               Right (Trailing trail2 val) -> pure $ Right $ Trailing (trail1 `mappend` trail2) val
-                                                                                               Left l -> pure $ Left l
-    Left l -> pure $ Left l
+  withEitherTrail (evalVal m_resolved ch_env m_trail) exp'
 
 evalArgs :: (Ref m r, Ord i, Show i)
          => Modifiable m r (Lam.Resolved i)
@@ -213,14 +241,16 @@ evalVal m_resolved ch_env m_trail (Right (Thunk thunkArgs thunkEnv thunk))
        if Set.null argsRemaining
          then case thunk of
                 ThunkFn _ fn -> evalVal m_resolved (pure thunkEnv') m_trail (fn thunkEnv')
-                ThunkExp exp -> evalAndVal m_resolved (pure thunkEnv') m_trail exp
+                ThunkTrailFn _ fn -> do trail <- readMod m_trail
+                                        evalVal m_resolved (pure thunkEnv') m_trail (fn trail thunkEnv')
+                ThunkEvalFn _ fn -> do fnResult <- fn thunkEnv' (evalVal m_resolved (pure thunkEnv') m_trail . Right)
+                                       withEitherTrail (evalVal m_resolved (pure thunkEnv') m_trail) fnResult
+                ThunkExp i exp -> eval m_resolved (pure thunkEnv') m_trail exp
+                                    >>= readMod
+                                    >>= pure . fmap (\(Trailing expTrail val) -> Trailing (mappend expTrail $ MonoidMap.singleton i [(thunkEnv', val)]) val) 
           else pure $ Right $ noTrail $ Thunk argsRemaining thunkEnv' thunk
        
 evalVal m_resolved ch_env _ v = pure $ noTrail <$> v
-
-evalAndVal m_resolved ch_env m_trail exp = eval m_resolved ch_env m_trail exp 
-                                             >>= readMod 
-                                             >>= withEitherTrail (evalVal m_resolved ch_env m_trail)
 
                       
 lookupVar :: (Ord i, Ref m r, Show i) => i -> T.Text -> Modifiable m r (Lam.Resolved i) -> Changeable m r (Map i (Val m r i)) -> Changeable m r (Maybe (Val m r i))

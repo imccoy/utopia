@@ -78,13 +78,13 @@ evalWithTrail m_bindingsWithIds ch_bindingsWithMod m_trail = do
   m_either_resolved <- newMod $ Lam.resolveVars (Lam.GlobalNames Builtins.functionIds Builtins.allArgIds) <$> readMod m_bindingsWithIds
   let ch_mainExp = (pure . fmap (\(_, _, exp) -> exp) . List.find (\(id, name, exp) -> name == "main")) =<< mapM Eval.flattenBinding =<< ch_bindingsWithMod
   let ch_toplevelEnv = do bindingsWithMod <- ch_bindingsWithMod
-                          assocs <- forM bindingsWithMod $ \binding -> do (\(id, name, exp) -> (id, Eval.Thunk Set.empty Map.empty $ Eval.ThunkExp exp)) <$> Eval.flattenBinding binding
+                          assocs <- forM bindingsWithMod $ \binding -> do (\(id, name, exp) -> (id, Eval.Thunk Set.empty Map.empty $ Eval.ThunkExp id exp)) <$> Eval.flattenBinding binding
                           pure $ Map.union (Map.fromList assocs) (Builtins.env)
   newMod $ do mainExp <- ch_mainExp
               either_resolved <- readMod m_either_resolved
               case (mainExp, either_resolved) of
                 (Just exp, Right resolved)  -> do m_resolved <- newMod $ inM $ pure resolved
-                                                  evaluated <- Eval.evalAndVal m_resolved ch_toplevelEnv m_trail exp
+                                                  evaluated <- Eval.eval m_resolved ch_toplevelEnv m_trail exp >>= readMod
                                                   pure $ (_Left %~ map RuntimeError) $ evaluated
                 (Nothing, _) -> pure . Left $ [RuntimeError $ Eval.UndefinedVar (CodeDbId "toplevel") "main"]
                 (_, Left resolveErrors) -> pure . Left $ [ParseError resolveErrors]
@@ -104,67 +104,89 @@ iterateTrail m_trail m_evalResult = do
   inCh (readMod m_evalResult) >>= \case
     Right (Eval.Trailing newTrail result) -> do trail1 <- inCh (readMod m_trail)
                                                 if trail1 == newTrail
-                                                  then do inM $ Eval.printTrail newTrail
+                                                  then do --inM $ putStrLn "ITERATE TRAIL DONE"
+                                                          --inM $ Eval.printTrail newTrail
                                                           pure $ Right result
-                                                  else do change m_trail newTrail
+                                                  else do --inM $ putStrLn "ITERATE TRAIL"
+                                                          --inM $ Eval.printTrail newTrail
+                                                          change m_trail newTrail
                                                           propagate
                                                           iterateTrail m_trail m_evalResult
     Left e -> pure $ Left e
 
+projectCode code = do
+  bindingsWithIds <- runCodeDbIdGen $ mapM (Lam.bindingWithId nextCodeDbId) code
+  projection <- eitherToError $ mapLeft (userError . show) $ bindingsWithIdsProjection bindingsWithIds
+  pure (bindingsWithIds, projection)
+
+
+runProjection :: [Lam.BindingWithId CodeDbId] -> Adaptive IO IORef (Modifiable IO IORef [Lam.BindingWithId CodeDbId], Adaptive IO IORef (Either [Error] (Eval.Val IO IORef CodeDbId)))
+runProjection bindingsWithIds = do 
+  m_bindingsWithIds <- newModBy (\bs1 bs2 -> (Set.fromList . map Id._id $ bs1) == (Set.fromList . map Id._id $ bs2)) $ inM $ pure bindingsWithIds
+  let ch_bindingsWithMod = mapM Eval.bindingWithMod =<< readMod m_bindingsWithIds
+
+  let ch_evaluated = eval m_bindingsWithIds ch_bindingsWithMod
+
+  pure (m_bindingsWithIds, ch_evaluated)
+ 
+
 main :: IO ()
 main = do
-  v1bindingsWithIds <- runCodeDbIdGen $ mapM (Lam.bindingWithId nextCodeDbId) Code.v1
-  v1projection <- eitherToError $ mapLeft (userError . show) $ bindingsWithIdsProjection v1bindingsWithIds
-  let initialDb = initFromProjection v1projection
-  printProjection v1projection
+--  (v1bindingsWithIds, v1projection) <- projectCode Code.v1
+--  putStrLn "v1========="
+--  let initialDb = initFromProjection v1projection
+--  printProjection v1projection
+--
+--  putStrLn "v2========="
+--  (v2bindingsWithIds, v2projection) <- projectCode Code.v2
+--  printProjection v2projection
 
-  v2bindingsWithIds <- runCodeDbIdGen $ mapM (Lam.bindingWithId nextCodeDbId) Code.v2
-  v2projection <- eitherToError $ mapLeft (userError . show) $ bindingsWithIdsProjection v2bindingsWithIds
-  printProjection v2projection
+  putStrLn "tracey====="
+  (traceyBindingsWithIds, traceyProjection) <- projectCode Code.tracey
+  printProjection traceyProjection
 
-  let (reversedDiffResult, diffResult) = diffProjection initialDb v2projection
-  putStrLn $ T.pack $ show diffResult
+--  let (reversedDiffResult, diffResult) = diffProjection initialDb v2projection
+--  putStrLn $ T.pack $ show diffResult
+
+--  run $ do
+--    (m_bindingsWithIds, ch_evaluated) <- runProjection v1bindingsWithIds
+--    inM . putStrLn . T.pack . show =<< ch_evaluated
+--  
+--    change m_bindingsWithIds v2bindingsWithIds
+--    propagate
+--    inM . putStrLn . T.pack . show =<< ch_evaluated
+--
+--  run $ do
+--    m_bindingsWithIds <- newModBy (\bs1 bs2 -> (Set.fromList . map Id._id $ bs1) == (Set.fromList . map Id._id $ bs2)) $ inM $ pure v1bindingsWithIds
+--    m_bindingsWithMod <- newMod (mapM Eval.bindingWithMod =<< readMod m_bindingsWithIds)
+--    let ch_bindingsWithMod = readMod m_bindingsWithMod
+--    let ch_evaluated = eval m_bindingsWithIds ch_bindingsWithMod
+--
+--    inM . putStrLn . T.pack . show =<< ch_evaluated
+--  
+--    m_v2bindingsWithIds <- newModBy (\bs1 bs2 -> (Set.fromList . map Id._id $ bs1) == (Set.fromList . map Id._id $ bs2)) $ inM $ pure v2bindingsWithIds
+--    let zeroCostMappings = Map.map (CodeDbId . DiffTree.dstNodeIdText) $ Map.mapKeys (CodeDbId . DiffTree.srcNodeIdText) $ Diff.zeroCostMappings diffResult
+--    let v2reuses = pure . Map.unions =<< mapM (\b -> Eval.bindingExp b >>= Eval.reuses zeroCostMappings) =<< ch_bindingsWithMod
+--    let ch_v2bindingsWithMod = do reuses <- v2reuses
+--                                  bindingsWithIds <- readMod m_v2bindingsWithIds
+--                                  mapM (\binding -> Eval.bindingWithModReusing reuses binding) bindingsWithIds
+-- 
+--    change m_bindingsWithMod =<< inCh ch_v2bindingsWithMod
+--    change m_bindingsWithIds v2bindingsWithIds
+--    propagate
+--    inM . putStrLn . T.pack . show =<< ch_evaluated
 
   run $ do
-    m_bindingsWithIds <- newModBy (\bs1 bs2 -> (Set.fromList . map Id._id $ bs1) == (Set.fromList . map Id._id $ bs2)) $ inM $ pure v1bindingsWithIds
-    let ch_bindingsWithMod = mapM Eval.bindingWithMod =<< readMod m_bindingsWithIds
+    (m_bindingsWithIds, ch_evaluated) <- runProjection traceyBindingsWithIds
+    inM . putStrLn . T.pack . (either show Eval.pprintVal) =<< ch_evaluated
+    
 
-    let ch_evaluated = eval m_bindingsWithIds ch_bindingsWithMod
-
-    inM . putStrLn . T.pack . show =<< ch_evaluated
-  
-    change m_bindingsWithIds v2bindingsWithIds
-    propagate
-    inM . putStrLn . T.pack . show =<< ch_evaluated
-
-  run $ do
-    m_bindingsWithIds <- newModBy (\bs1 bs2 -> (Set.fromList . map Id._id $ bs1) == (Set.fromList . map Id._id $ bs2)) $ inM $ pure v1bindingsWithIds
-    m_bindingsWithMod <- newMod (mapM Eval.bindingWithMod =<< readMod m_bindingsWithIds)
-    let ch_bindingsWithMod = readMod m_bindingsWithMod
-    let ch_evaluated = eval m_bindingsWithIds ch_bindingsWithMod
-
-    inM . putStrLn . T.pack . show =<< ch_evaluated
-  
-    m_v2bindingsWithIds <- newModBy (\bs1 bs2 -> (Set.fromList . map Id._id $ bs1) == (Set.fromList . map Id._id $ bs2)) $ inM $ pure v2bindingsWithIds
-    let zeroCostMappings = Map.map (CodeDbId . DiffTree.dstNodeIdText) $ Map.mapKeys (CodeDbId . DiffTree.srcNodeIdText) $ Diff.zeroCostMappings diffResult
-    let v2reuses = pure . Map.unions =<< mapM (\b -> Eval.bindingExp b >>= Eval.reuses zeroCostMappings) =<< ch_bindingsWithMod
-    let ch_v2bindingsWithMod = do reuses <- v2reuses
-                                  bindingsWithIds <- readMod m_v2bindingsWithIds
-                                  mapM (\binding -> Eval.bindingWithModReusing reuses binding) bindingsWithIds
- 
-    change m_bindingsWithMod =<< inCh ch_v2bindingsWithMod
-    change m_bindingsWithIds v2bindingsWithIds
-    propagate
-    inM . putStrLn . T.pack . show =<< ch_evaluated
-
-  
-
-  let html = Html.mappingHtml reversedDiffResult diffResult
-  (filePath, handle) <- openTempFile "." ".html"
-  LB.hPut handle $ renderHtml html
-  hClose handle
-  putStrLn $ T.pack filePath
-  void $ spawnCommand $ "open " ++ filePath
+--  let html = Html.mappingHtml reversedDiffResult diffResult
+--  (filePath, handle) <- openTempFile "." ".html"
+--  LB.hPut handle $ renderHtml html
+--  hClose handle
+--  putStrLn $ T.pack filePath
+--  void $ spawnCommand $ "open " ++ filePath
   return ()
 
 
