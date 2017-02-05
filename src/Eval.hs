@@ -162,11 +162,13 @@ noTrail v = Trailing mempty v
 
 dropTrail (Trailing _ v) = v
 
-withEitherTrail :: (Monad m', Ord i) => (Either e v1 -> m' (Either e (Trailing m r i v2))) -> Either e (Trailing m r i v1) -> m' (Either e (Trailing m r i v2))
+withEitherTrail :: (Monad m', Ord i) => (v1 -> m' (Either e (Trailing m r i v2))) -> Either e (Trailing m r i v1) -> m' (Either e (Trailing m r i v2))
 withEitherTrail f (Left e) = pure $ Left e
-withEitherTrail f (Right (Trailing t1 v1)) = do f (Right v1) >>= \case
-                                                                   Left e -> pure $ Left e
-                                                                   Right (Trailing t2 v2) -> pure $ Right $ Trailing (t1 `mappend` t2) v2
+withEitherTrail f (Right (Trailing t1 v1)) = do f  v1 >>= \case
+                                                             Left e -> pure $ Left e
+                                                             Right (Trailing t2 v2) -> pure $ Right $ Trailing (t1 `mappend` t2) v2
+
+
 
 eval :: (Ref m r, Ord i, Show i)
   => Modifiable m r (Lam.Resolved i)
@@ -182,12 +184,9 @@ eval m_resolved ch_env m_trail (Fix (Lam.ExpW (Modish expMod))) = newMod $ do
                                                                          pure argId
                             pure $ Right $ noTrail $ Thunk (Set.fromList argIds) env (ThunkExp id exp)
 
-    Lam.AppF exp args -> do argsEnv <- evalArgs m_resolved ch_env m_trail args
-                            case argsEnv of
-                              Right successesMap -> do env <- ch_env
-                                                       let Trailing argsTrail env' = ((`Map.union` env)) <$> successesMap
-                                                       fmap (\(Trailing expTrail val) -> Trailing (argsTrail `mappend` expTrail) val) <$> (readMod =<< eval m_resolved (pure env') m_trail exp)
-                              Left e -> pure . Left $ e
+    Lam.AppF exp args -> withEitherTrail (\argsEnv -> do env <- ch_env
+                                                         readMod =<< eval m_resolved (pure $ Map.union env argsEnv) m_trail exp)
+                                         =<< (evalArgs m_resolved ch_env m_trail args)
 
     Lam.VarF var -> do lookupVar id var m_resolved ch_env >>= 
                          \case
@@ -223,14 +222,13 @@ evalArgs m_resolved ch_env m_trail args = do argVals <- forM args $ \(Modish arg
                                                else pure . Left . concat $ errors
          
 
-
 evalVal :: (Ref m r, Ord i, Show i)
         => Modifiable m r (Lam.Resolved i)
         -> Changeable m r (Map i (Val m r i))
         -> Modifiable m r (Trail m r i)
-        -> Either [EvalError i] (Val m r i)
+        -> Val m r i
         -> Changeable m r (Either [EvalError i] (Trailing m r i (Val m r i)))
-evalVal m_resolved ch_env m_trail (Right (Thunk thunkArgs thunkEnv thunk)) 
+evalVal m_resolved ch_env m_trail (Thunk thunkArgs thunkEnv thunk)
   = do env <- ch_env
        let argsInEnv = Set.intersection thunkArgs (Map.keysSet env)
        let argsRemaining = Set.difference thunkArgs argsInEnv
@@ -240,17 +238,29 @@ evalVal m_resolved ch_env m_trail (Right (Thunk thunkArgs thunkEnv thunk))
 
        if Set.null argsRemaining
          then case thunk of
-                ThunkFn _ fn -> evalVal m_resolved (pure thunkEnv') m_trail (fn thunkEnv')
+                ThunkFn _ fn -> evalEitherVal m_resolved (pure thunkEnv') m_trail (fn thunkEnv')
                 ThunkTrailFn _ fn -> do trail <- readMod m_trail
-                                        evalVal m_resolved (pure thunkEnv') m_trail (fn trail thunkEnv')
-                ThunkEvalFn _ fn -> do fnResult <- fn thunkEnv' (evalVal m_resolved (pure thunkEnv') m_trail . Right)
+                                        evalEitherVal m_resolved (pure thunkEnv') m_trail (fn trail thunkEnv')
+                ThunkEvalFn _ fn -> do fnResult <- fn thunkEnv' (evalVal m_resolved (pure thunkEnv') m_trail)
                                        withEitherTrail (evalVal m_resolved (pure thunkEnv') m_trail) fnResult
                 ThunkExp i exp -> eval m_resolved (pure thunkEnv') m_trail exp
                                     >>= readMod
                                     >>= pure . fmap (\(Trailing expTrail val) -> Trailing (mappend expTrail $ MonoidMap.singleton i [(thunkEnv', val)]) val) 
           else pure $ Right $ noTrail $ Thunk argsRemaining thunkEnv' thunk
        
-evalVal m_resolved ch_env _ v = pure $ noTrail <$> v
+evalVal m_resolved ch_env _ v = pure $ Right $ noTrail v
+
+
+
+evalEitherVal :: (Ref m r, Ord i, Show i)
+        => Modifiable m r (Lam.Resolved i)
+        -> Changeable m r (Map i (Val m r i))
+        -> Modifiable m r (Trail m r i)
+        -> Either [EvalError i] (Val m r i)
+        -> Changeable m r (Either [EvalError i] (Trailing m r i (Val m r i)))
+evalEitherVal m_resolved ch_env m_trail (Right v)
+  = evalVal m_resolved ch_env m_trail v
+evalEitherVal m_resolved ch_env m_trail (Left e) = pure $ Left e
 
                       
 lookupVar :: (Ord i, Ref m r, Show i) => i -> T.Text -> Modifiable m r (Lam.Resolved i) -> Changeable m r (Map i (Val m r i)) -> Changeable m r (Maybe (Val m r i))
