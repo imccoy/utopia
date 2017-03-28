@@ -84,22 +84,23 @@ data Thunk m r i = ThunkFn i (Map i (Val m r i) -> Either [EvalError i] (Val m r
 
 type Env m r i = Map i (Val m r i)
 
-instance (Eq i, EqRef r) => Eq (Thunk m r i) where
+instance (Eq i) => Eq (Thunk m r i) where
   ThunkFn f1 _ == ThunkFn f2 _           = f1 == f2
   ThunkTrailFn f1 _ == ThunkTrailFn f2 _ = f1 == f2
   ThunkEvalFn f1 _ == ThunkEvalFn f2 _   = f1 == f2
-  ThunkExp _ e1 == ThunkExp _ e2         = e1 == e2
+  ThunkExp f1 _ == ThunkExp f2 _         = f1 == f2
   _ == _                                 = False
 
 
-instance (Ord i, EqRef r) => Ord (Thunk m r i) where
+instance (Ord i, Show i) => Ord (Thunk m r i) where
   ThunkFn f1 _ `compare` ThunkFn f2 _           = f1 `compare` f2
+  ThunkFn f1 _ `compare` _                      = LT
   ThunkTrailFn f1 _ `compare` ThunkTrailFn f2 _ = f1 `compare` f2
-  ThunkEvalFn f1 _ `compare` ThunkEvalFn f2 _   = f1 `compare` f2
-  ThunkExp f1 _ `compare` ThunkExp f2 _         = f1 `compare` f2
-  ThunkFn _ _ `compare` _                       = LT
   ThunkTrailFn _ _ `compare` _                  = LT
+  ThunkEvalFn f1 _ `compare` ThunkEvalFn f2 _   = f1 `compare` f2
   ThunkEvalFn _ _ `compare` _                   = LT
+  ThunkExp f1 _ `compare` ThunkExp f2 _         = f1 `compare` f2
+  t1 `compare` t2                                = error $ "Ord instance for Thunks is not total (" ++ show t1 ++ ", " ++ show t2 ++ ")"
 
 
 
@@ -109,8 +110,8 @@ instance Show i => Show (Thunk m r i) where
   show (ThunkEvalFn i _) = "thunkevalfn " ++ show i
   show (ThunkExp i exp) = "thunkexp " ++ show i
 
-deriving instance (Eq i, EqRef r) => Eq (Val m r i)
-deriving instance (Ord i, EqRef r) => Ord (Val m r i)
+deriving instance (Eq i) => Eq (Val m r i)
+deriving instance (Ord i, Show i) => Ord (Val m r i)
 
 deriving instance (Show i) => Show (Val m r i)
 
@@ -153,7 +154,7 @@ printTrail = mapM_ printTrailElems . Map.assocs . unMonoidMap
 
 data Trailing m r i a = Trailing (Trail m r i) a
 
-instance (Ref m r, Ord i, Monoid a) => Monoid (Trailing m r i a) where
+instance (Ref m r, Ord i, Show i, Monoid a) => Monoid (Trailing m r i a) where
   mempty = Trailing MonoidMap.empty mempty
   mappend (Trailing t1 v1) (Trailing t2 v2) = Trailing (mappend t1 t2) (mappend v1 v2)
 
@@ -167,7 +168,7 @@ instance (Show a) => Show (Trailing m r i a) where
 instance Functor (Trailing m r i) where
   fmap f (Trailing t v) = Trailing t (f v)
 
-instance (Ord i, EqRef r) => Applicative (Trailing m r i) where
+instance (Ord i, Show i) => Applicative (Trailing m r i) where
   pure v = noTrail v
   Trailing t1 f <*> Trailing t2 v = Trailing (mappend t1 t2) (f v)
 
@@ -175,7 +176,7 @@ noTrail v = Trailing mempty v
 
 dropTrail (Trailing _ v) = v
 
-withEitherTrail :: (Monad m', Ord i, EqRef r) => (v1 -> m' (Either e (Trailing m r i v2))) -> Either e (Trailing m r i v1) -> m' (Either e (Trailing m r i v2))
+withEitherTrail :: (Monad m', Ord i, Show i) => (v1 -> m' (Either e (Trailing m r i v2))) -> Either e (Trailing m r i v1) -> m' (Either e (Trailing m r i v2))
 withEitherTrail f (Left e) = pure $ Left e
 withEitherTrail f (Right (Trailing t1 v1)) = do f  v1 >>= \case
                                                              Left e -> pure $ Left e
