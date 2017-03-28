@@ -69,6 +69,7 @@ executable utopia
                        containers,
                        blaze-html,
                        bytestring,
+                       either,
                        lens,
                        mtl,
                        process,

@@ -133,7 +133,7 @@ listEmpty = Builtin "listEmpty" [] . FnBody $ \i e -> do
 suspensionList :: (EqRef r) => Builtin m r
 suspensionList = Builtin "suspensionList" ["suspensionList_suspension"] . TrailFnBody $ \i trail e -> do
   (suspensionResolvedId, suspensionEnv) <- getSuspension i "builtin-suspensionList-suspensionList_suspension" e
-  let trailElements = fromMaybe [] (Map.lookup suspensionResolvedId . unMonoidMap $ trail)
+  let trailElements = Set.toList $ fromMaybe Set.empty (Map.lookup suspensionResolvedId . unMonoidMap $ trail)
   
   pure $ ValList [ ValFrame suspensionResolvedId trailElementEnv trailElementVal
                  | (trailElementEnv, trailElementVal) <- trailElements

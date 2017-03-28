@@ -87,9 +87,21 @@ type Env m r i = Map i (Val m r i)
 instance (Eq i, EqRef r) => Eq (Thunk m r i) where
   ThunkFn f1 _ == ThunkFn f2 _           = f1 == f2
   ThunkTrailFn f1 _ == ThunkTrailFn f2 _ = f1 == f2
-  ThunkEvalFn f1 _ == ThunkEvalFn f2 _ = f1 == f2
+  ThunkEvalFn f1 _ == ThunkEvalFn f2 _   = f1 == f2
   ThunkExp _ e1 == ThunkExp _ e2         = e1 == e2
   _ == _                                 = False
+
+
+instance (Ord i, EqRef r) => Ord (Thunk m r i) where
+  ThunkFn f1 _ `compare` ThunkFn f2 _           = f1 `compare` f2
+  ThunkTrailFn f1 _ `compare` ThunkTrailFn f2 _ = f1 `compare` f2
+  ThunkEvalFn f1 _ `compare` ThunkEvalFn f2 _   = f1 `compare` f2
+  ThunkExp f1 _ `compare` ThunkExp f2 _         = f1 `compare` f2
+  ThunkFn _ _ `compare` _                       = LT
+  ThunkTrailFn _ _ `compare` _                  = LT
+  ThunkEvalFn _ _ `compare` _                   = LT
+
+
 
 instance Show i => Show (Thunk m r i) where
   show (ThunkFn i _) = "thunkfn " ++ show i
@@ -98,6 +110,7 @@ instance Show i => Show (Thunk m r i) where
   show (ThunkExp i exp) = "thunkexp " ++ show i
 
 deriving instance (Eq i, EqRef r) => Eq (Val m r i)
+deriving instance (Ord i, EqRef r) => Ord (Val m r i)
 
 deriving instance (Show i) => Show (Val m r i)
 
@@ -127,7 +140,7 @@ pprintVal = unlines . go 0
 
 
 type TrailElement m r i = (Env m r i, Val m r i)
-type Trail m r i = MonoidMap i [TrailElement m r i]
+type Trail m r i = MonoidMap i (Set (TrailElement m r i))
 
 
 printTrail :: (Show i) => Eval.Trail m r i -> IO ()
@@ -154,7 +167,7 @@ instance (Show a) => Show (Trailing m r i a) where
 instance Functor (Trailing m r i) where
   fmap f (Trailing t v) = Trailing t (f v)
 
-instance (Ord i) => Applicative (Trailing m r i) where
+instance (Ord i, EqRef r) => Applicative (Trailing m r i) where
   pure v = noTrail v
   Trailing t1 f <*> Trailing t2 v = Trailing (mappend t1 t2) (f v)
 
@@ -162,7 +175,7 @@ noTrail v = Trailing mempty v
 
 dropTrail (Trailing _ v) = v
 
-withEitherTrail :: (Monad m', Ord i) => (v1 -> m' (Either e (Trailing m r i v2))) -> Either e (Trailing m r i v1) -> m' (Either e (Trailing m r i v2))
+withEitherTrail :: (Monad m', Ord i, EqRef r) => (v1 -> m' (Either e (Trailing m r i v2))) -> Either e (Trailing m r i v1) -> m' (Either e (Trailing m r i v2))
 withEitherTrail f (Left e) = pure $ Left e
 withEitherTrail f (Right (Trailing t1 v1)) = do f  v1 >>= \case
                                                              Left e -> pure $ Left e
@@ -245,7 +258,7 @@ evalVal m_resolved ch_env m_trail (Thunk thunkArgs thunkEnv thunk)
                                        withEitherTrail (evalVal m_resolved (pure thunkEnv') m_trail) fnResult
                 ThunkExp i exp -> eval m_resolved (pure thunkEnv') m_trail exp
                                     >>= readMod
-                                    >>= pure . fmap (\(Trailing expTrail val) -> Trailing (mappend expTrail $ MonoidMap.singleton i [(thunkEnv', val)]) val) 
+                                    >>= pure . fmap (\(Trailing expTrail val) -> Trailing (mappend expTrail $ MonoidMap.singleton i (Set.singleton (thunkEnv', val))) val) 
           else pure $ Right $ noTrail $ Thunk argsRemaining thunkEnv' thunk
        
 evalVal m_resolved ch_env _ v = pure $ Right $ noTrail v
