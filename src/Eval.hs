@@ -120,10 +120,12 @@ pprintVal = unlines . go 0
   where
     put indent s = [replicate indent ' ' ++ s]
     go indent (Primitive p) = put indent ("Primitive " ++ show p)
-    go indent (Thunk needed _ t) = concat [ put indent ("Thunk " ++ show t)
-                                          , put (indent + 2) "needs"
-                                          , concat $ (put (indent + 4) . show) <$> Set.toList needed
-                                          ]
+    go indent (Thunk needed _ t) = concat $ [ put indent ("Thunk " ++ show t) ] ++ neededArgsRows
+      where neededArgsRows
+              | Set.null needed  = []
+              | otherwise        = [ put (indent + 2) "needs"
+                                   , concat $ (put (indent + 4) . show) <$> Set.toList needed
+                                   ]
     go indent (Suspension _ _) = put indent ("Suspension")
     go indent (ValFrame i env result) = concat [ put indent ("ValFrame " ++ show i)
                                                , go (indent + 2) result
