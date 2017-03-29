@@ -101,18 +101,19 @@ iterateTrail :: Modifiable IO IORef (Eval.Trail IO IORef CodeDbId)
              -> Modifiable IO IORef (Either [Error] (Eval.Trailing IO IORef CodeDbId (Eval.Val IO IORef CodeDbId)))
              -> Adaptive IO IORef (Either [Error] (Eval.Val IO IORef CodeDbId))
 iterateTrail m_trail m_evalResult = do
-  inCh (readMod m_evalResult) >>= \case
-    Right (Eval.Trailing newTrail result) -> do trail1 <- inCh (readMod m_trail)
-                                                if trail1 == newTrail
-                                                  then do --inM $ putStrLn "ITERATE TRAIL DONE"
-                                                          --inM $ Eval.printTrail newTrail
-                                                          pure $ Right result
-                                                  else do --inM $ putStrLn "ITERATE TRAIL"
-                                                          --inM $ Eval.printTrail newTrail
-                                                          change m_trail newTrail
-                                                          propagate
-                                                          iterateTrail m_trail m_evalResult
-    Left e -> pure $ Left e
+  inCh (readMod m_evalResult) >>= 
+    \case
+      Right (Eval.Trailing newTrail result) -> do trail1 <- inCh (readMod m_trail)
+                                                  if trail1 == newTrail
+                                                    then do --inM $ putStrLn "ITERATE TRAIL DONE"
+                                                            --inM $ Eval.printTrail newTrail
+                                                            pure $ Right result
+                                                    else do --inM $ putStrLn "ITERATE TRAIL"
+                                                            --inM $ Eval.printTrail newTrail
+                                                            change m_trail newTrail
+                                                            propagate
+                                                            iterateTrail m_trail m_evalResult
+      Left e -> pure $ Left e
 
 projectCode code = do
   bindingsWithIds <- runCodeDbIdGen $ mapM (Lam.bindingWithId nextCodeDbId) code

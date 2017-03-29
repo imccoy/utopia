@@ -37,7 +37,6 @@ tracey = [ Binding "gen1" $ lam ["gen1_n"] $
                    ,("listMap_f", lam ["builtin-listMap-listMap_f-elem"] $
                                       app (var "gen2")
                                           [("gen2_n", app (var "frameArg") [("frameArg_frame", var "builtin-listMap-listMap_f-elem"), ("frameArg_arg", lamArgId "gen1_n")])])
---                                          [("gen2_n", var "builtin-listMap-listMap_f-elem")])
                    ]
          , Binding "glue3" $ lam [] $
                app (var "suspensionFrameList")
