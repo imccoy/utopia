@@ -29,6 +29,7 @@ data ExpF w e = LamF [w Name] e
               | AppF e [(w Name, e)]
               | VarF Name
               | SuspendF Name [(w Name, e)]
+              | LamArgIdF Name
               | LitF Literal
   deriving (Functor, Prelude.Foldable, Traversable)
 
@@ -61,20 +62,25 @@ lit literal = Fix $ ExpW $ pure $ LitF literal
 suspend :: Name -> [(T.Text, Exp)] -> Exp
 suspend name args = Fix $ ExpW $ pure $ SuspendF name (traverse . _1 %~ (\name -> pure name) $ args)
 
+lamArgId :: T.Text -> Exp
+lamArgId name = Fix $ ExpW $ pure $ LamArgIdF name
+
 --expChangeW :: (w a -> w' a) -> ExpF w e -> ExpF w' e
 expChangeW :: (w Name -> w' Name) -> ExpF w e -> ExpF w' e
 expChangeW f (LamF names e) = LamF (map f names) e
 expChangeW f (AppF fun args) = AppF fun (map (_1 %~ f) args)
-expChangeW _ (VarF n) = VarF n
 expChangeW f (SuspendF n args) = SuspendF n (map (_1 %~ f) args)
+expChangeW _ (LamArgIdF n) = LamArgIdF n
+expChangeW _ (VarF n) = VarF n
 expChangeW _ (LitF l) = LitF l
 
 
 expChangeWM :: (Monad m) => (w Name -> m (w' Name)) -> ExpF w e -> m (ExpF w' e)
 expChangeWM f (LamF names e) = LamF <$> mapM f names <*> pure e
 expChangeWM f (AppF fun args) = AppF fun <$> mapM (_1 %%~ f) args
-expChangeWM _ (VarF n) = pure $ VarF n
 expChangeWM f (SuspendF n args) = SuspendF n <$> mapM (_1 %%~ f) args
+expChangeWM _ (VarF n) = pure $ VarF n
+expChangeWM _ (LamArgIdF n) = pure $ LamArgIdF n
 expChangeWM _ (LitF l) = pure $ LitF l
 
 type ExpWithId i = Fix (ExpW (Id.WithId i Identity))
@@ -183,7 +189,7 @@ smooshExpVars = smooshEithers (\a b -> Right $ a `mappend` b) (\_ err -> err)
 concatExpVars :: (Ord i, Data.Foldable.Foldable t) => t (Either (UndefinedNames i) (Resolved i)) -> Either (UndefinedNames i) (Resolved i)
 concatExpVars = Data.Foldable.foldr smooshExpVars (Right Map.empty)
 
-resolveExpVars :: (Ord i) => GlobalNames i -> ExpWithId i -> Either (UndefinedNames i) (Resolved i)
+resolveExpVars :: forall i. (Ord i) => GlobalNames i -> ExpWithId i -> Either (UndefinedNames i) (Resolved i)
 resolveExpVars globalNames expr = go Map.empty expr
   where
     go env (Fix (ExpW (Id.WithId i (Identity e)))) = go' env i e
@@ -193,21 +199,26 @@ resolveExpVars globalNames expr = go Map.empty expr
         addNamesToEnv names = Map.union (Map.fromList [(name, id) | (Id.WithId id (Identity name)) <- names])
     go' env i (AppF e args) = concatExpVars $ (go env e):[lookupArg env arg | arg <- args]
 
+    go' env i (LamArgIdF name) = lookupArgName i name
     go' env i (VarF name) = resolveVarName env i name
     go' env i (SuspendF name args) = concatExpVars $ (resolveVarName env i name ):[lookupArg env arg | arg <- args]
     go' env i (LitF _) = Right $ Map.empty
 
+    resolveVarName :: forall a. Map Name i -> a -> Name -> Either (MonoidMap Name (Set a)) (Map a i)
     resolveVarName env i name = case Map.lookup name env of
                                   Just targetId -> Right $ Map.singleton i targetId
                                   Nothing -> case Map.lookup name (globalNamesTopLevelBindings globalNames) of
                                                Just targetId -> Right $ Map.singleton i targetId
                                                Nothing -> Left $ MonoidMap $ Map.singleton name (Set.singleton i)
 
-    lookupArg env ((Id.WithId id (Identity (argName))), exp) = concatExpVars [ case Map.lookup argName (globalNamesArgs globalNames) of
-                                                                                     Just targetId -> Right $ Map.singleton id targetId
-                                                                                     Nothing -> Left $ MonoidMap $ Map.singleton argName (Set.singleton id)
-                                                                                 , go env exp
-                                                                                 ]
+    lookupArg :: Map Name i -> (Id.WithId i Identity Name, Fix (ExpW (Id.WithId i Identity))) -> Either (UndefinedNames i) (Resolved i)
+    lookupArg env ((Id.WithId id (Identity (argName))), exp) = concatExpVars [ lookupArgName id argName 
+                                                                             , go env exp
+                                                                             ]
+    lookupArgName :: i -> Name -> Either (MonoidMap Name (Set i)) (Map i i)
+    lookupArgName id argName = case Map.lookup argName (globalNamesArgs globalNames) of
+                                 Just targetId -> Right $ Map.singleton id targetId
+                                 Nothing -> Left $ MonoidMap $ Map.singleton argName (Set.singleton id)
 
 
 bindingDiffTree :: Resolved T.Text -> BindingWithId T.Text -> DiffTree
@@ -248,8 +259,6 @@ expDiffTree env = cata $ \(ExpW (Id.WithId i (Identity v))) -> case v of
                                                      [e]
                                            | (Id.WithId argId (Identity arg), e) <- args
                                            ]
+  LamArgIdF name     -> DiffTree i "LamArgId" (Just (T.pack $ show name)) []
   LitF (Number n)    -> DiffTree i "LitNumber" (Just (T.pack $ show n)) []
   LitF (Text t)      -> DiffTree i "LitText" (Just t) []
-
-wrap :: T.Text -> T.Text -> [DiffTree] -> DiffTree
-wrap i name exps = DiffTree i name Nothing exps

@@ -78,6 +78,7 @@ data Val m r i = Primitive Prim.Prim
                | ValList [Val m r i]
 
 data Thunk m r i = ThunkFn i (Map i (Val m r i) -> Either [EvalError i] (Val m r i))
+                 | ThunkResolvedFn i (Map i (Val m r i) -> Changeable m r (Lam.Resolved i) -> Changeable m r (Either [EvalError i] (Trailing m r i (Val m r i))))
                  | ThunkEvalFn i (Map i (Val m r i) -> (Val m r i -> Changeable m r (Either [EvalError i] (Trailing m r i (Val m r i)))) -> Changeable m r (Either [EvalError i] (Trailing m r i (Val m r i))))
                  | ThunkTrailFn i (Trail m r i -> Map i (Val m r i) -> Either [EvalError i] (Val m r i))
                  | ThunkExp i (ExpWithMod m r i)
@@ -85,27 +86,31 @@ data Thunk m r i = ThunkFn i (Map i (Val m r i) -> Either [EvalError i] (Val m r
 type Env m r i = Map i (Val m r i)
 
 instance (Eq i) => Eq (Thunk m r i) where
-  ThunkFn f1 _ == ThunkFn f2 _           = f1 == f2
-  ThunkTrailFn f1 _ == ThunkTrailFn f2 _ = f1 == f2
-  ThunkEvalFn f1 _ == ThunkEvalFn f2 _   = f1 == f2
-  ThunkExp f1 _ == ThunkExp f2 _         = f1 == f2
-  _ == _                                 = False
+  ThunkFn f1 _         == ThunkFn f2 _         = f1 == f2
+  ThunkResolvedFn f1 _ == ThunkResolvedFn f2 _ = f1 == f2
+  ThunkTrailFn f1 _    == ThunkTrailFn f2 _    = f1 == f2
+  ThunkEvalFn f1 _     == ThunkEvalFn f2 _     = f1 == f2
+  ThunkExp f1 _        == ThunkExp f2 _        = f1 == f2
+  _                    == _                    = False
 
 
 instance (Ord i, Show i) => Ord (Thunk m r i) where
-  ThunkFn f1 _ `compare` ThunkFn f2 _           = f1 `compare` f2
-  ThunkFn f1 _ `compare` _                      = LT
-  ThunkTrailFn f1 _ `compare` ThunkTrailFn f2 _ = f1 `compare` f2
-  ThunkTrailFn _ _ `compare` _                  = LT
-  ThunkEvalFn f1 _ `compare` ThunkEvalFn f2 _   = f1 `compare` f2
-  ThunkEvalFn _ _ `compare` _                   = LT
-  ThunkExp f1 _ `compare` ThunkExp f2 _         = f1 `compare` f2
-  t1 `compare` t2                                = error $ "Ord instance for Thunks is not total (" ++ show t1 ++ ", " ++ show t2 ++ ")"
+  ThunkFn f1 _         `compare` ThunkFn f2 _         = f1 `compare` f2
+  ThunkFn f1 _         `compare` _                    = LT
+  ThunkResolvedFn f1 _ `compare` ThunkResolvedFn f2 _ = f1 `compare` f2
+  ThunkResolvedFn _ _  `compare` _                    = LT
+  ThunkTrailFn f1 _    `compare` ThunkTrailFn f2 _    = f1 `compare` f2
+  ThunkTrailFn _ _     `compare` _                    = LT
+  ThunkEvalFn f1 _     `compare` ThunkEvalFn f2 _     = f1 `compare` f2
+  ThunkEvalFn _ _      `compare` _                    = LT
+  ThunkExp f1 _        `compare` ThunkExp f2 _        = f1 `compare` f2
+  t1                   `compare` t2                   = error $ "Ord instance for Thunks is not total (" ++ show t1 ++ ", " ++ show t2 ++ ")"
 
 
 
 instance Show i => Show (Thunk m r i) where
   show (ThunkFn i _) = "thunkfn " ++ show i
+  show (ThunkResolvedFn i _) = "thunkresolvedfn " ++ show i
   show (ThunkTrailFn i _) = "thunktrailfn " ++ show i
   show (ThunkEvalFn i _) = "thunkevalfn " ++ show i
   show (ThunkExp i exp) = "thunkexp " ++ show i
@@ -184,8 +189,6 @@ withEitherTrail f (Right (Trailing t1 v1)) = do f  v1 >>= \case
                                                              Left e -> pure $ Left e
                                                              Right (Trailing t2 v2) -> pure $ Right $ Trailing (t1 `mappend` t2) v2
 
-
-
 eval :: (Ref m r, Ord i, Show i)
   => Modifiable m r (Lam.Resolved i)
   -> Changeable m r (Map i (Val m r i))
@@ -204,7 +207,12 @@ eval m_resolved ch_env m_trail (Fix (Lam.ExpW (Modish expMod))) = newMod $ do
                                                          readMod =<< eval m_resolved (pure $ Map.union env argsEnv) m_trail exp)
                                          =<< (evalArgs m_resolved ch_env m_trail args)
 
-    Lam.VarF var -> do lookupVar id var m_resolved ch_env >>= 
+    Lam.LamArgIdF var -> do lookupVarId id m_resolved >>= 
+                              \case
+                                Nothing -> pure $ Left [UndefinedVar id var]
+                                Just varId -> pure $ Right $ noTrail $ Suspension varId Map.empty
+
+    Lam.VarF var -> do lookupVar id m_resolved ch_env >>= 
                          \case
                            Nothing -> pure $ Left [UndefinedVar id var]
                            Just val -> pure $ Right $ noTrail val
@@ -257,6 +265,8 @@ evalVal m_resolved ch_env m_trail (Thunk thunkArgs thunkEnv thunk)
                 ThunkFn _ fn -> evalEitherVal m_resolved (pure thunkEnv') m_trail (fn thunkEnv')
                 ThunkTrailFn _ fn -> do trail <- readMod m_trail
                                         evalEitherVal m_resolved (pure thunkEnv') m_trail (fn trail thunkEnv')
+                ThunkResolvedFn _ fn -> do fnResult <- fn thunkEnv' (readMod m_resolved)
+                                           withEitherTrail (evalVal m_resolved (pure thunkEnv') m_trail) fnResult
                 ThunkEvalFn _ fn -> do fnResult <- fn thunkEnv' (evalVal m_resolved (pure thunkEnv') m_trail)
                                        withEitherTrail (evalVal m_resolved (pure thunkEnv') m_trail) fnResult
                 ThunkExp i exp -> eval m_resolved (pure thunkEnv') m_trail exp
@@ -279,8 +289,11 @@ evalEitherVal m_resolved ch_env m_trail (Right v)
 evalEitherVal m_resolved ch_env m_trail (Left e) = pure $ Left e
 
                       
-lookupVar :: (Ord i, Ref m r, Show i) => i -> T.Text -> Modifiable m r (Lam.Resolved i) -> Changeable m r (Map i (Val m r i)) -> Changeable m r (Maybe (Val m r i))
-lookupVar id var m_resolved ch_env = do resolved <- readMod m_resolved
-                                        env <- ch_env
-                                        pure $ do varId <- Map.lookup id resolved
-                                                  Map.lookup varId env
+lookupVar :: (Ord i, Ref m r, Show i) => i -> Modifiable m r (Lam.Resolved i) -> Changeable m r (Map i (Val m r i)) -> Changeable m r (Maybe (Val m r i))
+lookupVar id m_resolved ch_env = do maybeVarId <- lookupVarId id m_resolved
+                                    env <- ch_env
+                                    pure $ do varId <- maybeVarId
+                                              Map.lookup varId env
+
+lookupVarId id m_resolved = do resolved <- readMod m_resolved
+                               pure $ Map.lookup id resolved
