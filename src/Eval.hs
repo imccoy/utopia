@@ -287,7 +287,7 @@ evalThunk :: (Show i, Ord i, Ref m r)
           -> Env m r i
           -> Thunk m r i
           -> Changeable m r (Either [EvalError i] (Trailing m r i (Val m r i)))
-evalThunk m_resolved ior_magicNumbers m_trail thunkEnv' = go
+evalThunk m_resolved ior_magicNumbers m_trail thunkEnv' thunk = go thunk >>= pure . fmap (\(Trailing expTrail val) -> Trailing (mappend expTrail $ MonoidMap.singleton (thunkId thunk) (Map.singleton thunkEnv' val)) val)
   where go (ThunkFn _ fn) = evalEitherVal m_resolved ior_magicNumbers (pure thunkEnv') m_trail (fn thunkEnv')
         go (ThunkTrailFn _ fn) = do trail <- readMod m_trail
                                     evalEitherVal m_resolved ior_magicNumbers (pure thunkEnv') m_trail (fn trail thunkEnv')

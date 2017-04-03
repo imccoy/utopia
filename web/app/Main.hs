@@ -2,6 +2,8 @@ module Main where
 
 import Prelude hiding (id)
 
+import Debug.Trace
+
 import           Control.Monad (void)
 import qualified Control.Monad.Adaptive as Adaptive
 import           Control.Monad.Adaptive (inM)
@@ -41,7 +43,9 @@ data Event = ClickEvent
 type AllEvents = Map Text [Event]
 
 addEvent :: Event -> Text -> AllEvents -> AllEvents
-addEvent event = Map.alter (\events -> (event:) <$> (events `mappend` (Just []))) 
+addEvent event text allEvents = let result = addEvent' event text allEvents
+                                 in trace ("ADDED EVENT " ++ show result) result
+addEvent' event = Map.alter (\events -> (event:) <$> (events `mappend` (Just []))) 
 
 renderVal :: (Text -> Event -> IO ()) -> Val m r i -> VNode
 renderVal onEvent (ValList [ Primitive (Text "text")
@@ -69,7 +73,7 @@ runWeb mountPoint = do (bindingsWithIds, projection) <- Run.projectCode Code.web
                          let initialEnv = envFromEvents <$> Adaptive.readMod events
                          (m_bindingsWithIds, ch_evaluated) <- Run.runProjectionWithEnv bindingsWithIds initialEnv
                          let rerender token event = Adaptive.run $ do currentEvents <- Adaptive.inCh $ Adaptive.readMod events
-                                                                      Adaptive.change events $ addEvent event token currentEvents
+                                                                      Adaptive.change events $ addEvent event ("events-" `T.append` token) currentEvents
                                                                       Adaptive.propagate
                                                                       (inM . render rerender mountPoint) =<< ch_evaluated
                                                                       

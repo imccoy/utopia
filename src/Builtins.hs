@@ -1,5 +1,7 @@
 module Builtins (functionIds, allArgIds, EvalError(..), Builtin, env) where
 
+import Debug.Trace
+
 import Control.Lens
 import Control.Monad ((>=>))
 import Control.Monad.Adaptive
@@ -196,7 +198,8 @@ htmlElementEvents :: Builtin
 htmlElementEvents = Builtin "htmlElementEvents" ["htmlElementEvents_element"] . FnBody $ \i e -> do
   element <- getList i "builtin-htmlElementEvents-htmlElementEvents_element" e
   case element of
-    [Primitive (Prim.Text "button"), _, Primitive (Prim.Text token)] -> pure $ case Map.lookup (CodeDbId $ "events-" `T.append` token) e of
+    [Primitive (Prim.Text "button"), _, Primitive (Prim.Text token)] -> trace ("LOOKUP OF events-" ++ T.unpack token) $
+                                                                        pure $ case Map.lookup (CodeDbId $ "events-" `T.append` token) e of
                                                                                  Just v -> v
                                                                                  Nothing -> ValList []
     _ -> Left [TypeError i $ T.pack $ show element ++ " is not an element with events"]
