@@ -131,6 +131,14 @@ plus = Builtin "+" ["+_1", "+_2"] . FnBody $ \i e -> do
   m <- getNumber i "builtin-+-+_2" e
   pure $ Primitive $ Prim.Number $ n + m
 
+minus :: Builtin
+minus = Builtin "-" ["-_1", "-_2"] . FnBody $ \i e -> do
+  n <- getNumber i "builtin----_1" e
+  m <- getNumber i "builtin----_2" e
+  pure $ Primitive $ Prim.Number $ n - m
+
+
+
 listConcat :: Builtin
 listConcat = Builtin "listConcat" ["listConcat_1", "listConcat_2"] . FnBody $ \i e -> do
   n <- getList i "builtin-listConcat-listConcat_1" e
@@ -228,7 +236,7 @@ suspensionFrameList = Builtin "suspensionFrameList" ["suspensionFrameList_suspen
                  , Map.isSubmapOf suspensionEnv trailElementEnv ]
 
 builtins :: [Builtin]
-builtins = [plus
+builtins = [ plus, minus
            , listConcat, listAdd, listEmpty, listMap, listLength, listSum
            , numberToText
            , suspensionFrameList, frameArg, frameResult

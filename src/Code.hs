@@ -75,11 +75,16 @@ web = [ Binding "incrementButton" $ lam [] $
           app (var "htmlButton")
               [ ("htmlButton_text", lit (Text "+"))
               ]
-      , Binding "clickCount" $ lam [] $
+      , Binding "decrementButton" $ lam [] $
+          app (var "htmlButton")
+              [ ("htmlButton_text", lit (Text "-"))
+              ]
+
+      , Binding "clickCount" $ lam ["clickCount_button"] $
           app (var "listSum")
               [("listSum_list", app (var "listMap")
                                     [("listMap_list" ,app (var "suspensionFrameList")
-                                                          [("suspensionFrameList_suspension", suspend "incrementButton" [])])
+                                                          [("suspensionFrameList_suspension", (var "clickCount_button"))])
                                     ,("listMap_f", lam ["builtin-listMap-listMap_f-elem"] $
                                                      app (var "listLength")
                                                          [("listLength_list", app (var "htmlElementEvents")
@@ -89,18 +94,24 @@ web = [ Binding "incrementButton" $ lam [] $
                                                          ])
                                     ])
               ]
-
       , Binding "main" $ lam [] $
           listOf [ app (var "htmlText")
                        [ ("htmlText_text", lit (Text "Oh, hello there"))
                        ]
                  , app (var "htmlText")
                        [ ("htmlText_text", app (var "numberToText")
-                                               [ ("numberToText_number", app (var "clickCount")
-                                                                             [])
-                                               ])
-                       ]
+                                               [ ("numberToText_number", app (var "-")
+                                                                             [("-_1", app (var "clickCount")
+                                                                                          [("clickCount_button", suspend "incrementButton" [])])
+                                                                             ,("-_2", app (var "clickCount")
+                                                                                          [("clickCount_button", suspend "decrementButton" [])])
+                                                                             ]
+                                               )]
+                       )]
+ 
                  , app (var "incrementButton")
+                       []
+                 , app (var "decrementButton")
                        []
                  ]
       ] 
