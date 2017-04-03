@@ -3,10 +3,8 @@ module Id where
 
 import Prelude hiding (id)
 
-import Data.Functor.Foldable.Extended
-
 data WithId i f v = WithId { _id :: i, _value :: f v }
-  deriving (Show, Functor, Prelude.Foldable, Traversable)
+  deriving (Show, Functor, Foldable, Traversable)
 
 instance (Eq i) => Eq (WithId i f v) where
   w1 == w2 = _id w1 == _id w2

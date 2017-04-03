@@ -14,7 +14,7 @@ cabal-version:       >=1.10
 
 library
   hs-source-dirs:      ../src
-  exposed-modules:     Code, CodeDb, CodeTree, Diff, DiffTree, Eval, Id, Lam, Builtins
+  exposed-modules:     Code, CodeDb, CodeTree, Diff, DiffTree, Eval, Id, Lam, Builtins, Run, Prim
   other-modules:       Data.Functor.Foldable.Extended
   default-extensions:  DeriveFunctor,
                        DeriveTraversable,
@@ -30,10 +30,13 @@ library
   default-language:    Haskell2010
   build-depends:       base >=4.8 && <4.9,
                        Adaptive,
+                       blaze-html,
                        containers,
                        edit-distance,
                        either,
                        lens,
+                       mtl,
+                       random,
                        recursion-schemes,
                        safe,
                        text,
@@ -69,18 +72,15 @@ executable utopia
   build-depends:       base >=4.8 && <4.9,
                        Adaptive,
                        containers,
-                       blaze-html,
                        bytestring,
                        either,
                        ghcjs-base,
                        ghcjs-vdom,
                        ghcjs-ffiqq,
                        lens,
-                       mtl,
                        process,
                        safe,
                        text,
-                       utopia,
-                       uuid
+                       utopia
   default-language:    Haskell2010
   ghc-options:         -Wall

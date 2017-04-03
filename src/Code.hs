@@ -69,6 +69,41 @@ listAdd elem list = app (var "listAdd")
 
 listOf :: [Exp] -> Exp
 listOf exps = foldr listAdd (var "listEmpty") exps
+
+web :: [Binding Exp]
+web = [ Binding "incrementButton" $ lam [] $
+          app (var "htmlButton")
+              [ ("htmlButton_text", lit (Text "+"))
+              ]
+      , Binding "clickCount" $ lam [] $
+          app (var "listSum")
+              [("listSum_list", app (var "listMap")
+                                    [("listMap_list" ,app (var "suspensionFrameList")
+                                                          [("suspensionFrameList_suspension", suspend "incrementButton" [])])
+                                    ,("listMap_f", lam ["builtin-listMap-listMap_f-elem"] $
+                                                     app (var "listLength")
+                                                         [("listLength_list", app (var "htmlElementEvents")
+                                                                                  [("htmlElementEvents_element", app (var "frameResult")
+                                                                                                                     [("frameResult_frame", var "builtin-listMap-listMap_f-elem")])
+                                                                                  ])
+                                                         ])
+                                    ])
+              ]
+
+      , Binding "main" $ lam [] $
+          listOf [ app (var "htmlText")
+                       [ ("htmlText_text", lit (Text "Oh, hello there"))
+                       ]
+                 , app (var "htmlText")
+                       [ ("htmlText_text", app (var "numberToText")
+                                               [ ("numberToText_number", app (var "clickCount")
+                                                                             [])
+                                               ])
+                       ]
+                 , app (var "incrementButton")
+                       []
+                 ]
+      ] 
 --
 --todo :: [Binding Exp]
 --todo = [ Binding "addTodo" $ lam [] $
