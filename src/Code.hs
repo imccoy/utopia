@@ -43,6 +43,8 @@ tracey = [ Binding "gen1" $ lam ["gen1_n"] $
                    [("suspensionFrameList_suspension", suspend "gen2" [])]
          , Binding "main" $ lam [] $
                listOf [ var "glue1"
+                      , app (var "suspensionFrameList")
+                            [("suspensionFrameList_suspension", suspend "gen1" [])]
                       , var "glue2"
                       , var "glue3"
                       ]
@@ -70,51 +72,96 @@ listAdd elem list = app (var "listAdd")
 listOf :: [Exp] -> Exp
 listOf exps = foldr listAdd (var "listEmpty") exps
 
-web :: [Binding Exp]
-web = [ Binding "incrementButton" $ lam [] $
-          app (var "htmlButton")
-              [ ("htmlButton_text", lit (Text "+"))
-              ]
-      , Binding "decrementButton" $ lam [] $
-          app (var "htmlButton")
-              [ ("htmlButton_text", lit (Text "-"))
-              ]
+buttonWeb :: [Binding Exp]
+buttonWeb = [ Binding "incrementButton" $ lam [] $
+                app (var "htmlButton")
+                    [ ("htmlButton_text", lit (Text "+"))
+                    ]
+            , Binding "decrementButton" $ lam [] $
+                app (var "htmlButton")
+                    [ ("htmlButton_text", lit (Text "-"))
+                    ]
 
-      , Binding "clickCount" $ lam ["clickCount_button"] $
-          app (var "listSum")
-              [("listSum_list", app (var "listMap")
-                                    [("listMap_list" ,app (var "suspensionFrameList")
-                                                          [("suspensionFrameList_suspension", (var "clickCount_button"))])
-                                    ,("listMap_f", lam ["builtin-listMap-listMap_f-elem"] $
-                                                     app (var "listLength")
-                                                         [("listLength_list", app (var "htmlElementEvents")
-                                                                                  [("htmlElementEvents_element", app (var "frameResult")
-                                                                                                                     [("frameResult_frame", var "builtin-listMap-listMap_f-elem")])
-                                                                                  ])
-                                                         ])
-                                    ])
-              ]
-      , Binding "main" $ lam [] $
-          listOf [ app (var "htmlText")
-                       [ ("htmlText_text", lit (Text "Oh, hello there"))
-                       ]
-                 , app (var "htmlText")
-                       [ ("htmlText_text", app (var "numberToText")
-                                               [ ("numberToText_number", app (var "-")
-                                                                             [("-_1", app (var "clickCount")
-                                                                                          [("clickCount_button", suspend "incrementButton" [])])
-                                                                             ,("-_2", app (var "clickCount")
-                                                                                          [("clickCount_button", suspend "decrementButton" [])])
-                                                                             ]
-                                               )]
-                       )]
+            , Binding "clickCount" $ lam ["clickCount_button"] $
+                app (var "listSum")
+                    [("listSum_list", app (var "listMap")
+                                          [("listMap_list" ,app (var "suspensionFrameList")
+                                                                [("suspensionFrameList_suspension", (var "clickCount_button"))])
+                                          ,("listMap_f", lam ["builtin-listMap-listMap_f-elem"] $
+                                                           app (var "listLength")
+                                                               [("listLength_list", app (var "htmlElementEvents")
+                                                                                        [("htmlElementEvents_element", app (var "frameResult")
+                                                                                                                           [("frameResult_frame", var "builtin-listMap-listMap_f-elem")])
+                                                                                        ])
+                                                               ])
+                                          ])
+                    ]
+            , Binding "main" $ lam [] $
+                listOf [ app (var "htmlText")
+                             [ ("htmlText_text", lit (Text "Oh, hello there"))
+                             ]
+                       , app (var "htmlText")
+                             [ ("htmlText_text", app (var "numberToText")
+                                                     [ ("numberToText_number", app (var "-")
+                                                                                   [("-_1", app (var "clickCount")
+                                                                                                [("clickCount_button", suspend "incrementButton" [])])
+                                                                                   ,("-_2", app (var "clickCount")
+                                                                                                [("clickCount_button", suspend "decrementButton" [])])
+                                                                                   ]
+                                                     )]
+                             )]
  
-                 , app (var "incrementButton")
-                       []
-                 , app (var "decrementButton")
-                       []
-                 ]
-      ] 
+                       , app (var "incrementButton")
+                             []
+                       , app (var "decrementButton")
+                             []
+                       ]
+            ] 
+
+letBindings :: [(Name, Exp)] -> Exp -> Exp
+letBindings namesExps exp = app (lam (map fst namesExps) exp)
+                                namesExps
+
+-- give a name to the function whose frame is going to bind these names
+namedLetBindings :: Name -> [(Name, Exp)] -> Exp -> Exp
+namedLetBindings name namesExps inner = letBindings [(name, lam (map fst namesExps) inner)]
+                                                    (app (var name) namesExps)
+
+web = buttonWeb
+
+todoWeb :: [Binding Exp]
+todoWeb = [ Binding "todoForm" $ lam [] $
+              namedLetBindings "todoFormBindings"
+                               [ ("todoTextBox", app (var "htmlInputText") [])
+                               , ("addTodo", app (var "htmlButton") [("htmlButton_text", lit (Text "Add"))])
+                               ] $
+                               listOf [ suspend "todoFormBindings" []
+                                      , listOf [ app (var "todoTextBox") []
+                                               , app (var "addTodo") []
+                                               ]
+                                      ]
+          , Binding "main" $ lam [] $
+              listOf [ app (var "htmlText")
+                           [ ("htmlText_text", lit (Text "Oh, hello there"))
+                           ]
+                     , app (var "htmlText")
+                           [ ("htmlText_text", app (var "numberToText")
+                                                   [ ("numberToText_number", app (var "-")
+                                                                                 [("-_1", app (var "clickCount")
+                                                                                              [("clickCount_button", suspend "incrementButton" [])])
+                                                                                 ,("-_2", app (var "clickCount")
+                                                                                              [("clickCount_button", suspend "decrementButton" [])])
+                                                                                 ]
+                                                   )]
+                           )]
+    
+                     , app (var "incrementButton")
+                           []
+                     , app (var "decrementButton")
+                           []
+                     ]
+          ] 
+
 --
 --todo :: [Binding Exp]
 --todo = [ Binding "addTodo" $ lam [] $

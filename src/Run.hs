@@ -56,7 +56,7 @@ evalWithTrail m_bindingsWithIds ch_bindingsWithMod ch_initialEnv m_trail = do
   m_either_resolved <- newMod $ Lam.resolveVars (Lam.GlobalNames Builtins.functionIds Builtins.allArgIds) <$> readMod m_bindingsWithIds
   let ch_mainExp = (pure . fmap (\(_, _, exp) -> exp) . List.find (\(id, name, exp) -> name == "main")) =<< mapM Eval.flattenBinding =<< ch_bindingsWithMod
   let ch_toplevelEnv = do bindingsWithMod <- ch_bindingsWithMod
-                          assocs <- forM bindingsWithMod $ \binding -> do (\(id, name, exp) -> (id, Eval.Thunk Set.empty Map.empty $ Eval.ThunkExp id exp)) <$> Eval.flattenBinding binding
+                          assocs <- forM bindingsWithMod $ \binding -> do (\(id, name, exp) -> (id, Eval.Thunk Set.empty Map.empty $ Id.WithId id $ Identity $ Eval.ThunkExp exp)) <$> Eval.flattenBinding binding
                           initialEnv <- ch_initialEnv
                           pure $ Map.unions [Map.fromList assocs, Builtins.env, initialEnv]
   newMod $ do mainExp <- ch_mainExp
@@ -65,13 +65,13 @@ evalWithTrail m_bindingsWithIds ch_bindingsWithMod ch_initialEnv m_trail = do
                 (Just exp, Right resolved)  -> do m_resolved <- newMod $ inM $ pure resolved
                                                   ior_magicNumbers <- inM $ IORef.newIORef Map.empty
 
-                                                  let magicNumber i env = IORef.atomicModifyIORef ior_magicNumbers go
-                                                        where go map = case Map.lookup (i, env) map of
+                                                  let magicNumber i env parentMagicNumbers = IORef.atomicModifyIORef ior_magicNumbers go
+                                                        where go map = case Map.lookup (i, env, parentMagicNumbers) map of
                                                                          Just x -> (map, x)
                                                                          Nothing -> let x = fromIntegral $ Map.size map
-                                                                                     in (Map.insert (i, env) x map, x)
+                                                                                     in (Map.insert (i, env, parentMagicNumbers) x map, x)
 
-                                                  evaluated <- Eval.eval m_resolved magicNumber ch_toplevelEnv m_trail exp >>= readMod
+                                                  evaluated <- Eval.eval m_resolved magicNumber [] ch_toplevelEnv m_trail exp >>= readMod
                                                   pure $ (_Left %~ map RuntimeError) $ evaluated
                 (Nothing, _) -> pure . Left $ [RuntimeError $ Eval.UndefinedVar (CodeDbId "toplevel") "main"]
                 (_, Left resolveErrors) -> pure . Left $ [ParseError resolveErrors]

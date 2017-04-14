@@ -72,58 +72,33 @@ bindingExp binding = do (Id.WithId _ (Identity (Lam.Binding _ exp))) <- readMod 
 data EvalError i = UndefinedVar i T.Text | TypeError i T.Text
   deriving (Eq, Ord, Show)
 
+type ThunkWithId m r i = Id.WithId i Identity (Thunk m r i)
 
 data Val m r i = Primitive Prim.Prim
-               | Thunk (Set i) (Env m r i) (Thunk m r i)
+               | Thunk (Set i) (Env m r i) (ThunkWithId m r i)
                | Suspension i (Map i (Val m r i))
-               | ValFrame i (Map i (Val m r i)) (Val m r i)
+               | ValFrame (Frame m r i)
                | ValList [Val m r i]
-
-data Thunk m r i = ThunkFn i (Map i (Val m r i) -> Either [EvalError i] (Val m r i))
-                 | ThunkResolvedFn i (Integer -> Map i (Val m r i) -> Changeable m r (Lam.Resolved i) -> Changeable m r (Either [EvalError i] (Trailing m r i (Val m r i))))
-                 | ThunkEvalFn i (Map i (Val m r i) -> (Val m r i -> Changeable m r (Either [EvalError i] (Trailing m r i (Val m r i)))) -> Changeable m r (Either [EvalError i] (Trailing m r i (Val m r i))))
-                 | ThunkTrailFn i (Trail m r i -> Map i (Val m r i) -> Either [EvalError i] (Val m r i))
-                 | ThunkExp i (ExpWithMod m r i)
 
 type Env m r i = Map i (Val m r i)
 
-instance (Eq i) => Eq (Thunk m r i) where
-  ThunkFn f1 _         == ThunkFn f2 _         = f1 == f2
-  ThunkResolvedFn f1 _ == ThunkResolvedFn f2 _ = f1 == f2
-  ThunkTrailFn f1 _    == ThunkTrailFn f2 _    = f1 == f2
-  ThunkEvalFn f1 _     == ThunkEvalFn f2 _     = f1 == f2
-  ThunkExp f1 _        == ThunkExp f2 _        = f1 == f2
-  _                    == _                    = False
+type Trail m r i = Set (Frame m r i)
+data Trailing m r i a = Trailing (Trail m r i) a
 
-
-instance (Ord i, Show i) => Ord (Thunk m r i) where
-  ThunkFn f1 _         `compare` ThunkFn f2 _         = f1 `compare` f2
-  ThunkFn f1 _         `compare` _                    = LT
-  ThunkResolvedFn f1 _ `compare` ThunkResolvedFn f2 _ = f1 `compare` f2
-  ThunkResolvedFn _ _  `compare` _                    = LT
-  ThunkTrailFn f1 _    `compare` ThunkTrailFn f2 _    = f1 `compare` f2
-  ThunkTrailFn _ _     `compare` _                    = LT
-  ThunkEvalFn f1 _     `compare` ThunkEvalFn f2 _     = f1 `compare` f2
-  ThunkEvalFn _ _      `compare` _                    = LT
-  ThunkExp f1 _        `compare` ThunkExp f2 _        = f1 `compare` f2
-  t1                   `compare` t2                   = error $ "Ord instance for Thunks is not total (" ++ show t1 ++ ", " ++ show t2 ++ ")"
+data Thunk m r i = ThunkFn (Map i (Val m r i) -> Either [EvalError i] (Val m r i))
+                 | ThunkResolvedFn (Integer -> Map i (Val m r i) -> Changeable m r (Lam.Resolved i) -> Changeable m r (Either [EvalError i] (Trailing m r i (Val m r i))))
+                 | ThunkEvalFn (Map i (Val m r i) -> (Val m r i -> Changeable m r (Either [EvalError i] (Trailing m r i (Val m r i)))) -> Changeable m r (Either [EvalError i] (Trailing m r i (Val m r i))))
+                 | ThunkTrailFn (Trail m r i -> Map i (Val m r i) -> Either [EvalError i] (Val m r i))
+                 | ThunkExp (ExpWithMod m r i)
 
 
 
 instance Show i => Show (Thunk m r i) where
-  show (ThunkFn i _) = "thunkfn " ++ show i
-  show (ThunkResolvedFn i _) = "thunkresolvedfn " ++ show i
-  show (ThunkTrailFn i _) = "thunktrailfn " ++ show i
-  show (ThunkEvalFn i _) = "thunkevalfn " ++ show i
-  show (ThunkExp i exp) = "thunkexp " ++ show i
-
-thunkId (ThunkFn i _) = i
-thunkId (ThunkResolvedFn i _) = i
-thunkId (ThunkTrailFn i _) = i
-thunkId (ThunkEvalFn i _) = i
-thunkId (ThunkExp i _) = i
-
-
+  show (ThunkFn _) = "thunkfn"
+  show (ThunkResolvedFn _) = "thunkresolvedfn"
+  show (ThunkTrailFn _) = "thunktrailfn"
+  show (ThunkEvalFn _) = "thunkevalfn"
+  show (ThunkExp _) = "thunkexp"
 
 deriving instance (Eq i) => Eq (Val m r i)
 deriving instance (Ord i, Show i) => Ord (Val m r i)
@@ -135,42 +110,48 @@ pprintVal = unlines . go 0
   where
     put indent s = [replicate indent ' ' ++ s]
     go indent (Primitive p) = put indent ("Primitive " ++ show p)
-    go indent (Thunk needed _ t) = concat $ [ put indent ("Thunk " ++ show t) ] ++ neededArgsRows
+    go indent (Thunk needed _ t) = concat $ [ put indent $ "Thunk " ++ (show $ t ^. Id.id) ++ " " ++ (show $ t ^. Id.value) ] ++ neededArgsRows
       where neededArgsRows
               | Set.null needed  = []
               | otherwise        = [ put (indent + 2) "needs"
                                    , concat $ (put (indent + 4) . show) <$> Set.toList needed
                                    ]
     go indent (Suspension _ _) = put indent ("Suspension")
-    go indent (ValFrame i env result) = concat [ put indent ("ValFrame " ++ show i)
-                                               , go (indent + 2) result
-                                               , put (indent + 2) "ValFrameEnv"
-                                               , concat [ concat [ put (indent + 4) "ValFrameEnvElem"
-                                                                 , put (indent + 6) (show k)
-                                                                 , go (indent + 8) v
-                                                                 ]
-                                                        | (k, v) <- Map.assocs env
-                                                        ]
-                                               ]
+    go indent (ValFrame frame) = concat [ put indent $ "ValFrame " ++ show (_frameCodeDbId frame) ++ " " ++ show (_frameNumber frame) ++ " " ++ show (_frameParents frame)
+                                        , go (indent + 2) (_frameResult frame)
+                                        , put (indent + 2) "ValFrameEnv"
+                                        , concat [ concat [ put (indent + 4) "ValFrameEnvElem"
+                                                          , put (indent + 6) (show k)
+                                                          , go (indent + 8) v
+                                                          ]
+                                                 | (k, v) <- Map.assocs (_frameEnv frame)
+                                                 ]
+                                        ]
     go indent (ValList elems) = concat [ put indent "ValList"
                                        , concat $ go (indent + 2) <$> elems
                                        ]
 
 
-type Trail m r i = MonoidMap i (Map (Env m r i) (Val m r i))
+data Frame m r i = Frame { _frameParents :: [Integer]
+                         , _frameNumber :: Integer
+                         , _frameCodeDbId :: i
+                         , _frameEnv :: Env m r i
+                         , _frameResult :: Val m r i
+                         }
+  deriving (Ord, Eq, Show)
+makeLenses ''Frame
 
 printTrail :: (Show i) => Eval.Trail m r i -> IO ()
-printTrail = mapM_ printTrailElems . Map.assocs . unMonoidMap 
-  where printTrailElems (codeDbId, elems) = do putStrLn (show codeDbId)
-                                               mapM_ printTrailElem . Map.assocs $ elems
-        printTrailElem (env, val) = do putStrLn ("  " ++ show val)
-                                       mapM_ (\(name, v) -> putStrLn ("    " ++ show name ++ " " ++ show v)) $ Map.assocs env 
+printTrail = mapM_ printTrailElems
+  where printTrailElems (Frame parent number codeDbId env result) = 
+          do putStrLn $ show codeDbId ++ " " ++ show number ++ " (parent=" ++ show parent ++ ")"
+             putStrLn $ "  " ++ show result
+             mapM_ (\(name, v) -> putStrLn ("    " ++ show name ++ " " ++ show v)) $ Map.assocs env 
 
 
-data Trailing m r i a = Trailing (Trail m r i) a
 
 instance (Ref m r, Ord i, Show i, Monoid a) => Monoid (Trailing m r i a) where
-  mempty = Trailing MonoidMap.empty mempty
+  mempty = Trailing Set.empty mempty
   mappend (Trailing t1 v1) (Trailing t2 v2) = Trailing (mappend t1 t2) (mappend v1 v2)
 
 instance (Ref m r, Eq a, Eq i) => Eq (Trailing m r i a) where
@@ -191,30 +172,38 @@ noTrail v = Trailing mempty v
 
 dropTrail (Trailing _ v) = v
 
+withTrail f (Trailing t v) = Trailing (f t) v
+
+expandTrail :: (Ord i, Show i) => Frame m r i -> Trailing m r i v -> Trailing m r i v
+expandTrail frame = withTrail (Set.insert frame)
+
 withEitherTrail :: (Monad m', Ord i, Show i) => (v1 -> m' (Either e (Trailing m r i v2))) -> Either e (Trailing m r i v1) -> m' (Either e (Trailing m r i v2))
 withEitherTrail f (Left e) = pure $ Left e
 withEitherTrail f (Right (Trailing t1 v1)) = do f  v1 >>= \case
                                                              Left e -> pure $ Left e
                                                              Right (Trailing t2 v2) -> pure $ Right $ Trailing (t1 `mappend` t2) v2
 
+type ParentFrameNumbers = [Integer]
+
 eval :: (Ref m r, Ord i, Show i)
   => Modifiable m r (Lam.Resolved i)
   -> MagicNumber m r i
+  -> ParentFrameNumbers
   -> Changeable m r (Map i (Val m r i))
   -> Modifiable m r (Trail m r i)
   -> ExpWithMod m r i
   -> Changeable m r (Modifiable m r (Either [EvalError i] (Trailing m r i (Val m r i))))
-eval m_resolved ior_magicNumbers ch_env m_trail (Fix (Lam.ExpW (Modish expMod))) = newMod $ do
+eval m_resolved magicNumbers parentFrameNumbers ch_env m_trail (Fix (Lam.ExpW (Modish expMod))) = newMod $ do
   (Id.WithId id (Identity v)) <- readMod expMod 
   exp' <- case v of
     Lam.LamF args exp -> do env <- ch_env
                             argIds <- forM args $ \(Modish argMod) -> do (Id.WithId argId (Identity argName)) <- readMod argMod
                                                                          pure argId
-                            pure $ Right $ noTrail $ Thunk (Set.fromList argIds) env (ThunkExp id exp)
+                            pure $ Right $ noTrail $ Thunk (Set.fromList argIds) env (Id.WithId id (Identity . ThunkExp $ exp))
 
     Lam.AppF exp args -> withEitherTrail (\argsEnv -> do env <- ch_env
-                                                         readMod =<< eval m_resolved ior_magicNumbers (pure $ Map.union env argsEnv) m_trail exp)
-                                         =<< (evalArgs m_resolved ior_magicNumbers ch_env m_trail args)
+                                                         readMod =<< eval m_resolved magicNumbers parentFrameNumbers (pure $ Map.union env argsEnv) m_trail exp)
+                                         =<< (evalArgs m_resolved magicNumbers parentFrameNumbers ch_env m_trail args)
 
     Lam.LamArgIdF var -> do lookupVarId id m_resolved >>= 
                               \case
@@ -229,24 +218,25 @@ eval m_resolved ior_magicNumbers ch_env m_trail (Fix (Lam.ExpW (Modish expMod)))
     Lam.SuspendF var args -> do resolved <- readMod m_resolved
                                 case Map.lookup id resolved of
                                   Nothing -> pure $ Left [UndefinedVar id var]
-                                  Just resolvedId -> do argsEnv <- evalArgs m_resolved ior_magicNumbers ch_env m_trail args
+                                  Just resolvedId -> do argsEnv <- evalArgs m_resolved magicNumbers parentFrameNumbers ch_env m_trail args
                                                         -- noTrail . dropTrail is pretty weird! But since we're evaluating things to specify a suspension, we're kind of not in the real world maybe? Perhaps these shouldn't be expressions in their own right, but references to expressions in the tree that are fully legit? That way there wouldn't be this weird case where expressions don't leave a trail. We don't have a good 'syntax' for referring to expressions like that though.
                                                         pure $ (noTrail . Suspension resolvedId . dropTrail <$> argsEnv)
 
     Lam.LitF (Lam.Number n) -> pure $ Right $ noTrail $ Primitive $ Prim.Number n
     Lam.LitF (Lam.Text n) -> pure $ Right $ noTrail $ Primitive $ Prim.Text n
-  withEitherTrail (evalVal m_resolved ior_magicNumbers ch_env m_trail) exp'
+  withEitherTrail (evalVal m_resolved magicNumbers parentFrameNumbers ch_env m_trail) exp'
 
 evalArgs :: (Ref m r, Ord i, Show i)
          => Modifiable m r (Lam.Resolved i)
          -> MagicNumber m r i
+         -> ParentFrameNumbers
          -> Changeable m r (Map i (Val m r i))
          -> Modifiable m r (Trail m r i)
          -> [(Modish m r (Id.WithId i Identity) Lam.Name, Fix (Lam.ExpW (Modish m r (Id.WithId i Identity))))]
          -> Changeable m r (Either [EvalError i] (Trailing m r i (Map i (Val m r i))))           
-evalArgs m_resolved ior_magicNumbers ch_env m_trail args = 
+evalArgs m_resolved magicNumbers parentFrameNumbers ch_env m_trail args = 
   do argVals <- forM args $ \(Modish argNameMod, arg) -> do (Id.WithId argId (Identity argName)) <- readMod argNameMod
-                                                            argResult <- eval m_resolved ior_magicNumbers ch_env m_trail arg >>= readMod
+                                                            argResult <- eval m_resolved magicNumbers parentFrameNumbers ch_env m_trail arg >>= readMod
                                                             resolved <- readMod m_resolved
                                                             case Map.lookup argId resolved of
                                                               Just resolvedArgId -> pure (fmap (resolvedArgId,) <$> argResult)
@@ -260,11 +250,12 @@ evalArgs m_resolved ior_magicNumbers ch_env m_trail args =
 evalVal :: (Ref m r, Ord i, Show i)
         => Modifiable m r (Lam.Resolved i)
         -> MagicNumber m r i
+        -> ParentFrameNumbers
         -> Changeable m r (Map i (Val m r i))
         -> Modifiable m r (Trail m r i)
         -> Val m r i
         -> Changeable m r (Either [EvalError i] (Trailing m r i (Val m r i)))
-evalVal m_resolved ior_magicNumbers ch_env m_trail (Thunk thunkArgs thunkEnv thunk)
+evalVal m_resolved magicNumbers parentFrameNumbers ch_env m_trail (Thunk thunkArgs thunkEnv thunk)
   = do env <- ch_env
        let argsInEnv = Set.intersection thunkArgs (Map.keysSet env)
        let argsRemaining = Set.difference thunkArgs argsInEnv
@@ -273,43 +264,49 @@ evalVal m_resolved ior_magicNumbers ch_env m_trail (Thunk thunkArgs thunkEnv thu
        let thunkEnv' = Map.unions [env, argsEnv, thunkEnv]
 
        if Set.null argsRemaining
-         then evalThunk m_resolved ior_magicNumbers m_trail thunkEnv' thunk
+         then evalThunk m_resolved magicNumbers parentFrameNumbers m_trail thunkEnv' thunk
          else pure $ Right $ noTrail $ Thunk argsRemaining thunkEnv' thunk
        
-evalVal m_resolved _ ch_env _ v = pure $ Right $ noTrail v
+evalVal m_resolved _ _ ch_env _ v = pure $ Right $ noTrail v
 
-type MagicNumber m r i = i -> Env m r i -> m Integer
+type MagicNumber m r i = i -> Env m r i -> [Integer] -> m Integer
+
 
 evalThunk :: (Show i, Ord i, Ref m r)
           => Modifiable m r (Lam.Resolved i)
           -> MagicNumber m r i
+          -> ParentFrameNumbers
           -> Modifiable m r (Trail m r i)
           -> Env m r i
-          -> Thunk m r i
+          -> Id.WithId i Identity (Thunk m r i)
           -> Changeable m r (Either [EvalError i] (Trailing m r i (Val m r i)))
-evalThunk m_resolved ior_magicNumbers m_trail thunkEnv' thunk = go thunk >>= pure . fmap (\(Trailing expTrail val) -> Trailing (mappend expTrail $ MonoidMap.singleton (thunkId thunk) (Map.singleton thunkEnv' val)) val)
-  where go (ThunkFn _ fn) = evalEitherVal m_resolved ior_magicNumbers (pure thunkEnv') m_trail (fn thunkEnv')
-        go (ThunkTrailFn _ fn) = do trail <- readMod m_trail
-                                    evalEitherVal m_resolved ior_magicNumbers (pure thunkEnv') m_trail (fn trail thunkEnv')
-        go (ThunkResolvedFn i fn) = do magic <- inM $ ior_magicNumbers i thunkEnv'
-                                       fnResult <- fn magic thunkEnv' (readMod m_resolved)
-                                       withEitherTrail (evalVal m_resolved ior_magicNumbers (pure thunkEnv') m_trail) fnResult
-        go (ThunkEvalFn _ fn) = do fnResult <- fn thunkEnv' (evalVal m_resolved ior_magicNumbers (pure thunkEnv') m_trail)
-                                   withEitherTrail (evalVal m_resolved ior_magicNumbers (pure thunkEnv') m_trail) fnResult
-        go (ThunkExp _ exp) = eval m_resolved ior_magicNumbers (pure thunkEnv') m_trail exp
-                                    >>= readMod
+evalThunk m_resolved magicNumbers parentFrameNumbers0 m_trail thunkEnv' thunk
+   = do magic <- inM $ magicNumbers (thunk ^. Id.id) thunkEnv' parentFrameNumbers0
+        let parentFrameNumbers = magic:parentFrameNumbers0
+        either_result <- case Id.unId thunk of
+          ThunkFn fn         -> evalEitherVal m_resolved magicNumbers parentFrameNumbers (pure thunkEnv') m_trail (fn thunkEnv')
+          ThunkTrailFn fn    -> do trail <- readMod m_trail
+                                   evalEitherVal m_resolved magicNumbers parentFrameNumbers (pure thunkEnv') m_trail (fn trail thunkEnv')
+          ThunkResolvedFn fn -> do fnResult <- fn magic thunkEnv' (readMod m_resolved)
+                                   withEitherTrail (evalVal m_resolved magicNumbers parentFrameNumbers (pure thunkEnv') m_trail) fnResult
+          ThunkEvalFn fn     -> do fnResult <- fn thunkEnv' (evalVal m_resolved magicNumbers parentFrameNumbers (pure thunkEnv') m_trail)
+                                   withEitherTrail (evalVal m_resolved magicNumbers parentFrameNumbers (pure thunkEnv') m_trail) fnResult
+          ThunkExp exp       -> eval m_resolved magicNumbers parentFrameNumbers (pure thunkEnv') m_trail exp
+                                           >>= readMod
+        pure $ (\result -> expandTrail (Frame parentFrameNumbers0 magic (thunk ^. Id.id) thunkEnv' (dropTrail result)) result) <$> either_result
 
 
 evalEitherVal :: (Ref m r, Ord i, Show i)
         => Modifiable m r (Lam.Resolved i)
         -> MagicNumber m r i
+        -> ParentFrameNumbers
         -> Changeable m r (Map i (Val m r i))
         -> Modifiable m r (Trail m r i)
         -> Either [EvalError i] (Val m r i)
         -> Changeable m r (Either [EvalError i] (Trailing m r i (Val m r i)))
-evalEitherVal m_resolved ior_magicNumbers ch_env m_trail (Right v)
-  = evalVal m_resolved ior_magicNumbers ch_env m_trail v
-evalEitherVal m_resolved ior_magicNumbers ch_env m_trail (Left e) = pure $ Left e
+evalEitherVal m_resolved magicNumbers parentFrameNumbers ch_env m_trail (Right v)
+  = evalVal m_resolved magicNumbers parentFrameNumbers ch_env m_trail v
+evalEitherVal m_resolved magicNumbers parentFrameNumbers ch_env m_trail (Left e) = pure $ Left e
 
                       
 lookupVar :: (Ord i, Ref m r, Show i) => i -> Modifiable m r (Lam.Resolved i) -> Changeable m r (Map i (Val m r i)) -> Changeable m r (Maybe (Val m r i))

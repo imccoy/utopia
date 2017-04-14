@@ -15,7 +15,10 @@ import qualified Data.Set as Set
 import Data.Set (Set)
 import qualified Data.Text as T
 
-import Eval (Env, Val(..), EvalError(..), Thunk(..), Trail(..), Trailing, noTrail)
+
+import qualified Id
+import Eval (Env, Val(..), EvalError(..), Thunk(..), Trail(..), Trailing, noTrail, Frame, frameCodeDbId, frameEnv)
+import qualified Eval as Eval
 import CodeDb (CodeDbId (..), codeDbIdText)
 import qualified CodeDbIdGen
 import qualified Lam
@@ -33,7 +36,7 @@ data Builtin = Builtin { _name :: Name
 
 type BuiltinEnv = Env IO IORef CodeDbId
 type BuiltinVal = Val IO IORef CodeDbId
-type BuiltinThunk = Thunk IO IORef CodeDbId
+type BuiltinThunk = Id.WithId CodeDbId Identity (Thunk IO IORef CodeDbId)
 type BuiltinTrailing = Trailing IO IORef CodeDbId
 
 data BuiltinBody = FnBody (CodeDbId -> BuiltinEnv -> Either [EvalError CodeDbId] BuiltinVal)
@@ -68,10 +71,10 @@ getSuspension i argId env = get i argId env >>= \v ->
 getPrim :: CodeDbId -> T.Text -> BuiltinEnv -> Either [EvalError CodeDbId] Prim.Prim
 getPrim i argId env = get i argId env >>= asPrim i
 
-getFrame :: CodeDbId -> T.Text -> BuiltinEnv -> Either [EvalError CodeDbId] (CodeDbId, Map CodeDbId BuiltinVal, BuiltinVal)
+getFrame :: CodeDbId -> T.Text -> BuiltinEnv -> Either [EvalError CodeDbId] (Frame IO IORef CodeDbId)
 getFrame i argId env = get i argId env >>= \v ->
   case v of
-    ValFrame i env args -> Right (i, env, args)
+    ValFrame frame -> Right frame
     _ -> Left [TypeError i $ (T.pack $ show v) `T.append` " is not a frame"]
 
 asPrim i v = case v of
@@ -190,16 +193,16 @@ frameArg :: Builtin
 frameArg = Builtin "frameArg" ["frameArg_frame", "frameArg_arg"] . ResolvedFnBody $ \_ i e ch_resolved -> do
   resolved <- ch_resolved
   pure $ do
-    (frameId, frameEnv, _) <- getFrame i "builtin-frameArg-frameArg_frame" e
+    frame <- getFrame i "builtin-frameArg-frameArg_frame" e
     (argId, _) <- getSuspension i "builtin-frameArg-frameArg_arg" e
-    maybe (Left [UndefinedVar i (codeDbIdText argId)]) (Right . noTrail) $ Map.lookup argId frameEnv
+    maybe (Left [UndefinedVar i (codeDbIdText argId)]) (Right . noTrail) $ Map.lookup argId (frame ^. Eval.frameEnv)
 
 frameResult :: Builtin
 frameResult = Builtin "frameResult" ["frameResult_frame"] . ResolvedFnBody $ \_ i e ch_resolved -> do
   resolved <- ch_resolved
   pure $ do
-    (_, _, result) <- getFrame i "builtin-frameResult-frameResult_frame" e
-    pure $ noTrail $ result
+    frame <- getFrame i "builtin-frameResult-frameResult_frame" e
+    pure $ noTrail $ frame ^. Eval.frameResult
 
 
 htmlElementEvents :: Builtin
@@ -229,11 +232,12 @@ htmlButton = Builtin "htmlButton" ["htmlButton_text"] . ResolvedFnBody $ \magic 
 suspensionFrameList :: Builtin
 suspensionFrameList = Builtin "suspensionFrameList" ["suspensionFrameList_suspension"] . TrailFnBody $ \i trail e -> do
   (suspensionResolvedId, suspensionEnv) <- getSuspension i "builtin-suspensionFrameList-suspensionFrameList_suspension" e
-  let trailElements = Map.assocs $ fromMaybe Map.empty (Map.lookup suspensionResolvedId . unMonoidMap $ trail)
+  let trailElements = filter (\frame -> frame ^. frameCodeDbId == suspensionResolvedId) . Set.toList $ trail
+  --let trailElements = Map.assocs $ fromMaybe Map.empty (Map.lookup suspensionResolvedId . unMonoidMap $ trail)
   
-  pure $ ValList [ ValFrame suspensionResolvedId trailElementEnv trailElementVal
-                 | (trailElementEnv, trailElementVal) <- trailElements
-                 , Map.isSubmapOf suspensionEnv trailElementEnv ]
+  pure $ ValList [ ValFrame frame
+                 | frame <- trailElements
+                 , Map.isSubmapOf suspensionEnv (frame ^. frameEnv)]
 
 builtins :: [Builtin]
 builtins = [ plus, minus
@@ -264,10 +268,10 @@ allArgIds = Map.fromList $ foldMap builtinArgsIds builtins
 env :: Env IO IORef CodeDbId
 env = Map.fromList 
         [ (CodeDbId $ builtinId builtin
-          , Thunk (builtinArgsIdsSet builtin) Map.empty $ case builtin ^. body of
-                                                            FnBody fn -> ThunkFn (CodeDbId $ builtinId builtin) $ \env -> do fn (CodeDbId $ builtinId builtin) env
-                                                            ResolvedFnBody fn -> ThunkResolvedFn (CodeDbId $ builtinId builtin) $ \magic env resolved -> do fn magic (CodeDbId $ builtinId builtin) env resolved
-                                                            EvalFnBody fn -> ThunkEvalFn (CodeDbId $ builtinId builtin) $ \env eval -> fn (CodeDbId $ builtinId builtin) env eval
-                                                            TrailFnBody fn -> ThunkTrailFn (CodeDbId $ builtinId builtin) $ \trail env -> do fn (CodeDbId $ builtinId builtin) trail env
+          , Thunk (builtinArgsIdsSet builtin) Map.empty . Id.WithId (CodeDbId $ builtinId builtin) . Identity $ case builtin ^. body of
+                                                            FnBody fn -> ThunkFn $ \env -> do fn (CodeDbId $ builtinId builtin) env
+                                                            ResolvedFnBody fn -> ThunkResolvedFn $ \magic env resolved -> do fn magic (CodeDbId $ builtinId builtin) env resolved
+                                                            EvalFnBody fn -> ThunkEvalFn $ \env eval -> fn (CodeDbId $ builtinId builtin) env eval
+                                                            TrailFnBody fn -> ThunkTrailFn $ \trail env -> do fn (CodeDbId $ builtinId builtin) trail env
           )
         | builtin <- builtins]
