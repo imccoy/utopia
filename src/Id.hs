@@ -23,3 +23,4 @@ withIdEq :: Eq i => WithId i f v1 -> WithId i f v2 -> Bool
 withIdEq v1 v2 = _id v1 == _id v2
 
 unId (WithId _ (Identity v)) = v
+withId id val = WithId id (pure val)

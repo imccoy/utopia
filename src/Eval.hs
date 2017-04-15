@@ -53,10 +53,10 @@ reuses zeroCostMappings = go
                                                          Just dstNodeId -> Map.insert dstNodeId e children
                                                          Nothing -> children
 
-flattenBinding :: (Ref m r) => BindingWithMod m r i -> Changeable m r (i, Lam.Name, ExpWithMod m r i)
-flattenBinding expMod = do (Id.WithId _ (Identity (Lam.Binding n exp@(Fix (Lam.ExpW (Modish exp')))))) <- readMod expMod
-                           Id.WithId id _ <- readMod exp'
-                           pure (id, n, exp)
+flattenBinding :: (Ref m r) => BindingWithMod m r i -> Changeable m r (i, i, Lam.Name, ExpWithMod m r i)
+flattenBinding expMod = do (Id.WithId bindingId (Identity (Lam.Binding n exp@(Fix (Lam.ExpW (Modish exp')))))) <- readMod expMod
+                           Id.WithId boundId _ <- readMod exp'
+                           pure (bindingId, boundId, n, exp)
 
 bindingWithMod :: (Ord i, Eq i, Monad m, Ref m r) => Lam.BindingWithId i -> Changeable m r (BindingWithMod m r i)
 bindingWithMod = bindingWithModReusing Map.empty
@@ -199,7 +199,7 @@ eval m_resolved magicNumbers parentFrameNumbers ch_env m_trail (Fix (Lam.ExpW (M
     Lam.LamF args exp -> do env <- ch_env
                             argIds <- forM args $ \(Modish argMod) -> do (Id.WithId argId (Identity argName)) <- readMod argMod
                                                                          pure argId
-                            pure $ Right $ noTrail $ Thunk (Set.fromList argIds) env (Id.WithId id (Identity . ThunkExp $ exp))
+                            pure $ Right $ noTrail $ Thunk (Set.fromList argIds) env (Id.withId id (ThunkExp exp))
 
     Lam.AppF exp args -> withEitherTrail (\argsEnv -> do env <- ch_env
                                                          readMod =<< eval m_resolved magicNumbers parentFrameNumbers (pure $ Map.union env argsEnv) m_trail exp)
@@ -271,6 +271,17 @@ evalVal m_resolved _ _ ch_env _ v = pure $ Right $ noTrail v
 
 type MagicNumber m r i = i -> Env m r i -> [Integer] -> m Integer
 
+expWithModTopCon :: Ref m r => ExpWithMod m r i -> Changeable m r T.Text
+expWithModTopCon (Fix (Lam.ExpW (Modish mod))) = lamTopCon . Id.unId <$> readMod mod 
+
+lamTopCon :: Lam.ExpF w e -> T.Text
+lamTopCon (Lam.LamF _ _) = "LamF"
+lamTopCon (Lam.AppF _ _) = "AppF"
+lamTopCon (Lam.VarF _) = "VarF"
+lamTopCon (Lam.SuspendF _ _) = "SuspendF"
+lamTopCon (Lam.LamArgIdF _) = "LamArgIdF"
+lamTopCon (Lam.LitF _) = "LitF"
+
 
 evalThunk :: (Show i, Ord i, Ref m r)
           => Modifiable m r (Lam.Resolved i)
@@ -291,8 +302,9 @@ evalThunk m_resolved magicNumbers parentFrameNumbers0 m_trail thunkEnv' thunk
                                    withEitherTrail (evalVal m_resolved magicNumbers parentFrameNumbers (pure thunkEnv') m_trail) fnResult
           ThunkEvalFn fn     -> do fnResult <- fn thunkEnv' (evalVal m_resolved magicNumbers parentFrameNumbers (pure thunkEnv') m_trail)
                                    withEitherTrail (evalVal m_resolved magicNumbers parentFrameNumbers (pure thunkEnv') m_trail) fnResult
-          ThunkExp exp       -> eval m_resolved magicNumbers parentFrameNumbers (pure thunkEnv') m_trail exp
-                                           >>= readMod
+          ThunkExp exp       -> do exp' <- expWithModTopCon exp
+                                   eval m_resolved magicNumbers parentFrameNumbers (pure thunkEnv') m_trail exp
+                                             >>= readMod
         pure $ (\result -> expandTrail (Frame parentFrameNumbers0 magic (thunk ^. Id.id) thunkEnv' (dropTrail result)) result) <$> either_result
 
 

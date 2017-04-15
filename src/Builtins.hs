@@ -268,7 +268,7 @@ allArgIds = Map.fromList $ foldMap builtinArgsIds builtins
 env :: Env IO IORef CodeDbId
 env = Map.fromList 
         [ (CodeDbId $ builtinId builtin
-          , Thunk (builtinArgsIdsSet builtin) Map.empty . Id.WithId (CodeDbId $ builtinId builtin) . Identity $ case builtin ^. body of
+          , Thunk (builtinArgsIdsSet builtin) Map.empty . Id.withId (CodeDbId $ builtinId builtin) $ case builtin ^. body of
                                                             FnBody fn -> ThunkFn $ \env -> do fn (CodeDbId $ builtinId builtin) env
                                                             ResolvedFnBody fn -> ThunkResolvedFn $ \magic env resolved -> do fn magic (CodeDbId $ builtinId builtin) env resolved
                                                             EvalFnBody fn -> ThunkEvalFn $ \env eval -> fn (CodeDbId $ builtinId builtin) env eval

@@ -54,9 +54,9 @@ evalWithTrail :: Modifiable IO IORef [Lam.BindingWithId CodeDbId]
               -> Changeable IO IORef (Modifiable IO IORef (Either [Error] (Eval.Trailing IO IORef CodeDbId (Eval.Val IO IORef CodeDbId))))
 evalWithTrail m_bindingsWithIds ch_bindingsWithMod ch_initialEnv m_trail = do
   m_either_resolved <- newMod $ Lam.resolveVars (Lam.GlobalNames Builtins.functionIds Builtins.allArgIds) <$> readMod m_bindingsWithIds
-  let ch_mainExp = (pure . fmap (\(_, _, exp) -> exp) . List.find (\(id, name, exp) -> name == "main")) =<< mapM Eval.flattenBinding =<< ch_bindingsWithMod
+  let ch_mainExp = (pure . fmap (\(_, _, _, exp) -> exp) . List.find (\(bindingId, boundId, name, exp) -> name == "main")) =<< mapM Eval.flattenBinding =<< ch_bindingsWithMod
   let ch_toplevelEnv = do bindingsWithMod <- ch_bindingsWithMod
-                          assocs <- forM bindingsWithMod $ \binding -> do (\(id, name, exp) -> (id, Eval.Thunk Set.empty Map.empty $ Id.WithId id $ Identity $ Eval.ThunkExp exp)) <$> Eval.flattenBinding binding
+                          assocs <- forM bindingsWithMod $ \binding -> do (\(bindingId, boundId, name, exp) -> (boundId, Eval.Thunk Set.empty Map.empty $ Id.WithId bindingId $ Identity $ Eval.ThunkExp exp)) <$> Eval.flattenBinding binding
                           initialEnv <- ch_initialEnv
                           pure $ Map.unions [Map.fromList assocs, Builtins.env, initialEnv]
   newMod $ do mainExp <- ch_mainExp

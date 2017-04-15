@@ -43,8 +43,6 @@ tracey = [ Binding "gen1" $ lam ["gen1_n"] $
                    [("suspensionFrameList_suspension", suspend "gen2" [])]
          , Binding "main" $ lam [] $
                listOf [ var "glue1"
-                      , app (var "suspensionFrameList")
-                            [("suspensionFrameList_suspension", suspend "gen1" [])]
                       , var "glue2"
                       , var "glue3"
                       ]
