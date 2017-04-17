@@ -25,10 +25,15 @@ type Name = T.Text
 data Literal = Number Integer | Text T.Text
   deriving (Show)
 
+data SuspendSpec w e = SuspendSpec (w Name) [(w Name, e)] [SuspendSpec w e]
+  deriving (Functor, Prelude.Foldable, Traversable)
+
+deriving instance (Show e, Show (w e), Show (w Name)) => Show (SuspendSpec w e)
+
 data ExpF w e = LamF [w Name] e
               | AppF e [(w Name, e)]
               | VarF Name
-              | SuspendF Name [(w Name, e)]
+              | SuspendF (SuspendSpec w e)
               | LamArgIdF Name
               | LitF Literal
   deriving (Functor, Prelude.Foldable, Traversable)
@@ -54,22 +59,26 @@ app :: Exp -> [(T.Text, Exp)] -> Exp
 app f args = Fix $ ExpW $ pure $ AppF f (traverse . _1 %~ (\name -> pure name) $ args)
 
 var :: T.Text -> Exp
-var name = Fix $ ExpW $ pure $ VarF name
+var = Fix . ExpW . pure . VarF
 
 lit :: Literal -> Exp
-lit literal = Fix $ ExpW $ pure $ LitF literal
+lit = Fix . ExpW . pure . LitF
 
-suspend :: Name -> [(T.Text, Exp)] -> Exp
-suspend name args = Fix $ ExpW $ pure $ SuspendF name (traverse . _1 %~ (\name -> pure name) $ args)
+suspendSpec :: Name -> [(T.Text, Exp)] -> [SuspendSpec Identity Exp] -> SuspendSpec Identity Exp
+suspendSpec name args parents = SuspendSpec (pure name) (traverse . _1 %~ (\name -> pure name) $ args) parents
+
+suspend :: SuspendSpec Identity Exp -> Exp
+suspend = Fix . ExpW . pure . SuspendF
 
 lamArgId :: T.Text -> Exp
-lamArgId name = Fix $ ExpW $ pure $ LamArgIdF name
+lamArgId = Fix . ExpW . pure . LamArgIdF
 
 --expChangeW :: (w a -> w' a) -> ExpF w e -> ExpF w' e
 expChangeW :: (w Name -> w' Name) -> ExpF w e -> ExpF w' e
 expChangeW f (LamF names e) = LamF (map f names) e
 expChangeW f (AppF fun args) = AppF fun (map (_1 %~ f) args)
-expChangeW f (SuspendF n args) = SuspendF n (map (_1 %~ f) args)
+expChangeW f (SuspendF suspendSpec) = SuspendF $ go suspendSpec
+  where go (SuspendSpec name args parents) = SuspendSpec (f name) (map (_1 %~ f) args) (go <$> parents)
 expChangeW _ (LamArgIdF n) = LamArgIdF n
 expChangeW _ (VarF n) = VarF n
 expChangeW _ (LitF l) = LitF l
@@ -78,7 +87,8 @@ expChangeW _ (LitF l) = LitF l
 expChangeWM :: (Monad m) => (w Name -> m (w' Name)) -> ExpF w e -> m (ExpF w' e)
 expChangeWM f (LamF names e) = LamF <$> mapM f names <*> pure e
 expChangeWM f (AppF fun args) = AppF fun <$> mapM (_1 %%~ f) args
-expChangeWM f (SuspendF n args) = SuspendF n <$> mapM (_1 %%~ f) args
+expChangeWM f (SuspendF suspendSpec) = SuspendF <$> go suspendSpec
+  where go (SuspendSpec name args parents) = SuspendSpec <$> f name <*> mapM (_1 %%~ f) args <*> mapM go parents
 expChangeWM _ (VarF n) = pure $ VarF n
 expChangeWM _ (LamArgIdF n) = pure $ LamArgIdF n
 expChangeWM _ (LitF l) = pure $ LitF l
@@ -201,7 +211,8 @@ resolveExpVars globalNames expr = go Map.empty expr
 
     go' env i (LamArgIdF name) = lookupArgName i name
     go' env i (VarF name) = resolveVarName env i name
-    go' env i (SuspendF name args) = concatExpVars $ (resolveVarName env i name ):[lookupArg env arg | arg <- args]
+    --go' env i (SuspendF suspendSpec) = concatExpVars $ (resolveVarName env i name ):[lookupArg env arg | arg <- args]
+    go' env i (SuspendF suspendSpec) = resolveSuspendSpec env suspendSpec
     go' env i (LitF _) = Right $ Map.empty
 
     resolveVarName :: forall a. Map Name i -> a -> Name -> Either (MonoidMap Name (Set a)) (Map a i)
@@ -210,6 +221,8 @@ resolveExpVars globalNames expr = go Map.empty expr
                                   Nothing -> case Map.lookup name (globalNamesTopLevelBindings globalNames) of
                                                Just targetId -> Right $ Map.singleton i targetId
                                                Nothing -> Left $ MonoidMap $ Map.singleton name (Set.singleton i)
+
+    resolveSuspendSpec env (SuspendSpec (Id.WithId id (Identity name)) args parents) = concatExpVars $ (resolveVarName env id name):[lookupArg env arg | arg <- args] ++ [resolveSuspendSpec env parent | parent <- parents]
 
     lookupArg :: Map Name i -> (Id.WithId i Identity Name, Fix (ExpW (Id.WithId i Identity))) -> Either (UndefinedNames i) (Resolved i)
     lookupArg env ((Id.WithId id (Identity (argName))), exp) = concatExpVars [ lookupArgName id argName 
@@ -245,13 +258,7 @@ expDiffTree env = cata $ \(ExpW (Id.WithId i (Identity v))) -> case v of
                                           --          []
                                           --]
                                           []
-  SuspendF name args -> DiffTree i "Suspend" (Just name) 
-                                             [DiffTree argId
-                                                        "SuspendArg"
-                                                        (Just arg)
-                                                        [e]
-                                             | (Id.WithId argId (Identity arg), e) <- args
-                                             ]
+  SuspendF suspendSpec -> suspendSpecDiffTree suspendSpec
   AppF f args        -> DiffTree i "App" Nothing $
                                          f:[DiffTree argId
                                                      "AppArg"
@@ -262,3 +269,16 @@ expDiffTree env = cata $ \(ExpW (Id.WithId i (Identity v))) -> case v of
   LamArgIdF name     -> DiffTree i "LamArgId" (Just (T.pack $ show name)) []
   LitF (Number n)    -> DiffTree i "LitNumber" (Just (T.pack $ show n)) []
   LitF (Text t)      -> DiffTree i "LitText" (Just t) []
+
+suspendSpecDiffTree (SuspendSpec (Id.WithId i (Identity name)) args parents) = DiffTree i "Suspend" (Just name) $
+                                                                                                    [DiffTree argId
+                                                                                                               "SuspendArg"
+                                                                                                               (Just arg)
+                                                                                                               [e]
+                                                                                                    | (Id.WithId argId (Identity arg), e) <- args
+                                                                                                    ] ++ 
+                                                                                                    [ DiffTree (i `T.append` "-parent-" `T.append` (T.pack . show $ parentNumber))
+                                                                                                               "SuspendParent"
+                                                                                                               Nothing
+                                                                                                               [suspendSpecDiffTree parent]
+                                                                                                    | (parentNumber, parent) <- zip [0..] parents]

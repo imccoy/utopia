@@ -8,6 +8,7 @@ import Control.Monad.Adaptive
 import Control.Monad.Adaptive.Ref
 import Data.Either (partitionEithers)
 import Data.IORef
+import qualified Data.List as List
 import qualified Data.Map as Map
 import Data.Map (Map)
 import Data.Maybe (fromMaybe)
@@ -17,7 +18,7 @@ import qualified Data.Text as T
 
 
 import qualified Id
-import Eval (Env, Val(..), EvalError(..), Thunk(..), Trail(..), Trailing, noTrail, Frame, frameCodeDbId, frameEnv)
+import Eval (Env, Val(..), EvalError(..), Thunk(..), Trail(..), Trailing, noTrail, Suspension(..), Frame, frameCodeDbId, frameEnv)
 import qualified Eval as Eval
 import CodeDb (CodeDbId (..), codeDbIdText)
 import qualified CodeDbIdGen
@@ -37,6 +38,9 @@ data Builtin = Builtin { _name :: Name
 type BuiltinEnv = Env IO IORef CodeDbId
 type BuiltinVal = Val IO IORef CodeDbId
 type BuiltinThunk = Id.WithId CodeDbId Identity (Thunk IO IORef CodeDbId)
+type BuiltinSuspension = Suspension IO IORef CodeDbId
+type BuiltinTrail = Trail IO IORef CodeDbId
+type BuiltinFrame = Frame IO IORef CodeDbId
 type BuiltinTrailing = Trailing IO IORef CodeDbId
 
 data BuiltinBody = FnBody (CodeDbId -> BuiltinEnv -> Either [EvalError CodeDbId] BuiltinVal)
@@ -62,10 +66,10 @@ asList i v = case v of
   (ValList list) -> pure list 
   _ -> Left [TypeError i $ T.pack $ show v ++ " is not a list"]
 
-getSuspension :: CodeDbId -> T.Text -> BuiltinEnv -> Either [EvalError CodeDbId] (CodeDbId, Map CodeDbId BuiltinVal)
+getSuspension :: CodeDbId -> T.Text -> BuiltinEnv -> Either [EvalError CodeDbId] BuiltinSuspension
 getSuspension i argId env = get i argId env >>= \v ->
   case v of
-    (Suspension resolvedId env) -> Right (resolvedId, env)
+    (ValSuspension suspension) -> Right suspension
     _ -> Left [TypeError i $ T.pack $ show v ++ " is not a suspension"]
 
 getPrim :: CodeDbId -> T.Text -> BuiltinEnv -> Either [EvalError CodeDbId] Prim.Prim
@@ -194,7 +198,7 @@ frameArg = Builtin "frameArg" ["frameArg_frame", "frameArg_arg"] . ResolvedFnBod
   resolved <- ch_resolved
   pure $ do
     frame <- getFrame i "builtin-frameArg-frameArg_frame" e
-    (argId, _) <- getSuspension i "builtin-frameArg-frameArg_arg" e
+    (Suspension argId _ _) <- getSuspension i "builtin-frameArg-frameArg_arg" e
     maybe (Left [UndefinedVar i (codeDbIdText argId)]) (Right . noTrail) $ Map.lookup argId (frame ^. Eval.frameEnv)
 
 frameResult :: Builtin
@@ -231,13 +235,23 @@ htmlButton = Builtin "htmlButton" ["htmlButton_text"] . ResolvedFnBody $ \magic 
 
 suspensionFrameList :: Builtin
 suspensionFrameList = Builtin "suspensionFrameList" ["suspensionFrameList_suspension"] . TrailFnBody $ \i trail e -> do
-  (suspensionResolvedId, suspensionEnv) <- getSuspension i "builtin-suspensionFrameList-suspensionFrameList_suspension" e
-  let trailElements = filter (\frame -> frame ^. frameCodeDbId == suspensionResolvedId) . Set.toList $ trail
-  --let trailElements = Map.assocs $ fromMaybe Map.empty (Map.lookup suspensionResolvedId . unMonoidMap $ trail)
-  
+  suspension <- getSuspension i "builtin-suspensionFrameList-suspensionFrameList_suspension" e
+  let frames = suspensionFrames trail suspension
   pure $ ValList [ ValFrame frame
-                 | frame <- trailElements
-                 , Map.isSubmapOf suspensionEnv (frame ^. frameEnv)]
+                 | frame <- frames]
+  
+suspensionFrames :: BuiltinTrail -> BuiltinSuspension -> [BuiltinFrame]
+suspensionFrames trail (Suspension suspensionResolvedId suspensionEnv suspensionParents) = 
+  [ frame
+  | frame <- Set.toList trail
+  , frame ^. frameCodeDbId == suspensionResolvedId
+  , Map.isSubmapOf suspensionEnv (frame ^. frameEnv)
+  , parentsAreAncestors trail (frame ^. Eval.frameAncestors) suspensionParents
+  ]
+  where parentsAreAncestors _ _ [] = True
+        parentsAreAncestors trail frameAncestorNumbers suspensionParents = all (suspensionMatchesAFrameNumber trail frameAncestorNumbers) suspensionParents
+        suspensionMatchesAFrameNumber trail frameNumbers suspension = let frames = suspensionFrames trail suspension
+                                                                       in not . null $ List.intersect frameNumbers ((^. Eval.frameNumber) <$> frames)
 
 builtins :: [Builtin]
 builtins = [ plus, minus

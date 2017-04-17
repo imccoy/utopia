@@ -66,6 +66,7 @@ evalWithTrail m_bindingsWithIds ch_bindingsWithMod ch_initialEnv m_trail = do
                                                   ior_magicNumbers <- inM $ IORef.newIORef Map.empty
 
                                                   let magicNumber i env parentMagicNumbers = IORef.atomicModifyIORef ior_magicNumbers go
+                                                        -- this is bad and I feel bad
                                                         where go map = case Map.lookup (i, env, parentMagicNumbers) map of
                                                                          Just x -> (map, x)
                                                                          Nothing -> let x = fromIntegral $ Map.size map
