@@ -35,9 +35,9 @@ main = do
 --  (v2bindingsWithIds, v2projection) <- projectCode Code.v2
 --  printProjection v2projection
 
-  putStrLn "tracey====="
-  (traceyBindingsWithIds, traceyProjection) <- projectCode Code.tracey
-  printProjection traceyProjection
+  putStrLn "oneshoty====="
+  (oneshotBindingsWithIds, oneshotProjection) <- projectCode Code.oneshot
+  printProjection oneshotProjection
 
 --  let (reversedDiffResult, diffResult) = diffProjection initialDb v2projection
 --  putStrLn $ T.pack $ show diffResult
@@ -71,7 +71,7 @@ main = do
 --    inM . putStrLn . T.pack . show =<< ch_evaluated
 
   run $ do
-    (m_bindingsWithIds, ch_evaluated) <- runProjection traceyBindingsWithIds
+    (m_bindingsWithIds, ch_evaluated) <- runProjection oneshotBindingsWithIds
     inM . putStrLn . T.pack . (either show Eval.pprintVal) =<< ch_evaluated
     
 

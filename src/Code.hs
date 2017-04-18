@@ -1,6 +1,7 @@
 module Code where
 
 import Lam
+import Data.Text (Text)
 
 v1 :: [Binding Exp]
 v1 = [ Binding "add2" $ lam ["n"] $
@@ -51,6 +52,23 @@ tracey = [ Binding "gen1" $ lam ["gen1_n"] $
                       ]
          ]
 
+nestedMaps :: [Binding Exp]
+nestedMaps = [ Binding "main" $ lam [] $
+                 listOf [
+                          app (var "+") [("+_1", lit $ Number 1), ("+_2", (app (var "+") [("+_1", lit $ Number 2), ("+_2", lit $ Number 3)]))]
+                        , app (var "+") [("+_1", (app (var "+") [("+_1", lit $ Number 2), ("+_2", lit $ Number 3)])), ("+_2", lit $ Number 1)]
+                        , listMap (lam ["lists"] $
+                                      listMap (lam ["number"] $
+                                                   app (var "+") [("+_1", (var "number")), ("+_2", (var "number"))]
+                                              )
+                                              (var "lists")
+                                  )
+                                  (listOf [listOf [lit $ Number 1, lit $ Number 2], listOf [lit $ Number 3, lit $ Number 4]])
+                        ]
+             ]
+
+oneshot = nestedMaps
+
 -- data Event details env = Event Time details env
 -- data EventDetails = ButtonClick
 -- type Click = Event ButtonClick
@@ -73,6 +91,58 @@ listAdd elem list = app (var "listAdd")
 listOf :: [Exp] -> Exp
 listOf exps = foldr listAdd (var "listEmpty") exps
 
+listSum :: Exp -> Exp
+listSum list = app (var "listSum")
+                   [ ("listSum_list", list)
+                   ]
+
+listMap :: Exp -> Exp -> Exp
+listMap f list = app (var "listMap")
+                     [ ("listMap_list", list)
+                     , ("listMap_f", f)
+                     ]
+
+listFilter :: Exp -> Exp -> Exp
+listFilter f list = app (var "listFilter")
+                        [ ("listFilter_list", list)
+                        , ("listFilter_f", f)
+                        ]
+
+
+
+suspensionFrameList suspension = app (var "suspensionFrameList") 
+                                     [("suspensionFrameList_suspension", suspension)]
+
+listLength :: Exp -> Exp
+listLength l = app (var "listLength")
+                   [("listLength_list", l)]
+
+htmlElementEvents :: Exp -> Exp
+htmlElementEvents element = app (var "htmlElementEvents")
+                                [("htmlElementEvents_element", element)]
+
+htmlTextLit :: Text -> Exp
+htmlTextLit = htmlText . lit . Text
+
+htmlText :: Exp -> Exp
+htmlText text = app (var "htmlText")
+                    [ ("htmlText_text", text) ]
+
+
+
+frameArg :: Exp -> Exp -> Exp
+frameArg frame arg = app (var "frameArg")
+                         [ ("frameArg_frame", frame)
+                         , ("frameArg_arg", arg)]
+
+frameArgLit :: Exp -> Text -> Exp
+frameArgLit frame = frameArg frame . lamArgId
+
+
+frameResult :: Exp -> Exp
+frameResult frame = app (var "frameResult")
+                        [("frameResult_frame", frame)]
+
 buttonWeb :: [Binding Exp]
 buttonWeb = [ Binding "incrementButton" $ lam [] $
                 app (var "htmlButton")
@@ -84,19 +154,9 @@ buttonWeb = [ Binding "incrementButton" $ lam [] $
                     ]
 
             , Binding "clickCount" $ lam ["clickCount_button"] $
-                app (var "listSum")
-                    [("listSum_list", app (var "listMap")
-                                          [("listMap_list" ,app (var "suspensionFrameList")
-                                                                [("suspensionFrameList_suspension", (var "clickCount_button"))])
-                                          ,("listMap_f", lam ["builtin-listMap-listMap_f-elem"] $
-                                                           app (var "listLength")
-                                                               [("listLength_list", app (var "htmlElementEvents")
-                                                                                        [("htmlElementEvents_element", app (var "frameResult")
-                                                                                                                           [("frameResult_frame", var "builtin-listMap-listMap_f-elem")])
-                                                                                        ])
-                                                               ])
-                                          ])
-                    ]
+                listSum $ listMap (lam ["builtin-listMap-listMap_f-elem"] $
+                                       listLength $ htmlElementEvents $ frameResult (var "builtin-listMap-listMap_f-elem"))
+                                  (suspensionFrameList (var "clickCount_button"))
             , Binding "main" $ lam [] $
                 listOf [ app (var "htmlText")
                              [ ("htmlText_text", lit (Text "Oh, hello there"))
@@ -128,27 +188,49 @@ namedLetBindings :: Name -> [(Name, Exp)] -> Exp -> Exp
 namedLetBindings name namesExps inner = letBindings [(name, lam (map fst namesExps) inner)]
                                                     (app (var name) namesExps)
 
-web = buttonWeb
+web = todoWeb
+
 
 todoWeb :: [Binding Exp]
 todoWeb = [ Binding "todoTextBox" $ lam [] $
-              app (var "htmlInputText") []
+              app (var "htmlTextInput") []
           , Binding "todoAddButton" $ lam [] $
               app (var "htmlButton") [("htmlButton_text", lit (Text "Add"))]
           , Binding "todoForm" $ lam ["todoForm_n"] $
               listOf [ app (var "todoTextBox") []
                      , app (var "todoAddButton") []
                      ]
-          , Binding "savedTodoForms" $ lam [] $
-              suspend $ suspendSpec "todoForm" [] []
-          , Binding "unsavedTodoForms" $ lam [] $
-              lit (Text "hah")
           , Binding "savedTodoWidgets" $ lam [] $
-              lit (Text "hoh")
+              listMap (lam ["savedTodoForms_mapFrames"] $
+                          listMap (lam ["savedTodoForm_frame"] $ 
+                                      listMap ((lam ["event"] (htmlText (var "event"))) :: Exp)
+                                              (htmlElementEvents (frameResult (var "savedTodoForm_frame")))
+                                  )
+                                  (suspensionFrameList (suspend $ suspendSpec "todoTextBox" 
+                                                                              []
+                                                                              [suspendSpec "todoForm" [("todoForm_n", frameArgLit (var "savedTodoForms_mapFrames") "todoForm_n")] []]))
+                      )
+                      (listFilter (lam ["savedTodoForms_filterFrames"] $
+                                       app (var "clickCount")
+                                           [("clickCount_button", suspend $ suspendSpec "todoAddButton" 
+                                                                                        []
+                                                                                        [suspendSpec "todoForm" [("todoForm_n", frameArgLit (var "savedTodoForms_filterFrames") "todoForm_n")] []])]
+                                  )
+                                  (suspensionFrameList (suspend $ suspendSpec "todoForm" [] []))
+                      )
+          , Binding "unsavedTodoForms" $ lam [] $
+              htmlTextLit "hah"
           , Binding "main" $ lam [] $
               listOf [ app (var "unsavedTodoForms") []
                      , app (var "savedTodoWidgets") []
+                     , app (var "todoForm") [("todoForm_n", lit $ Number 0)]
+                     , app (var "todoForm") [("todoForm_n", lit $ Number 1)]
+                     , app (var "todoForm") [("todoForm_n", lit $ Number 2)]
                      ]
+          , Binding "clickCount" $ lam ["clickCount_button"] $
+             listSum $ listMap (lam ["builtin-listMap-listMap_f-elem"] $
+                                    listLength $ htmlElementEvents $ frameResult (var "builtin-listMap-listMap_f-elem"))
+                               (suspensionFrameList (var "clickCount_button"))
           ] 
 
 --

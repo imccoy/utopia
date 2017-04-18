@@ -205,7 +205,7 @@ eval m_resolved magicNumbers parentFrameNumbers ch_env m_trail (Fix (Lam.ExpW (M
                             pure $ Right $ noTrail $ Thunk (Set.fromList argIds) env (Id.withId id (ThunkExp exp))
 
     Lam.AppF exp args -> withEitherTrail (\argsEnv -> do env <- ch_env
-                                                         readMod =<< eval m_resolved magicNumbers parentFrameNumbers (pure $ Map.union env argsEnv) m_trail exp)
+                                                         readMod =<< eval m_resolved magicNumbers parentFrameNumbers (pure $ Map.union argsEnv env) m_trail exp)
                                          =<< (evalArgs m_resolved magicNumbers parentFrameNumbers ch_env m_trail args)
 
     Lam.LamArgIdF var -> do lookupVarId id m_resolved >>= 

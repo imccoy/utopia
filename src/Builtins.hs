@@ -11,14 +11,14 @@ import Data.IORef
 import qualified Data.List as List
 import qualified Data.Map as Map
 import Data.Map (Map)
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, catMaybes)
 import qualified Data.Set as Set
 import Data.Set (Set)
 import qualified Data.Text as T
 
 
 import qualified Id
-import Eval (Env, Val(..), EvalError(..), Thunk(..), Trail(..), Trailing, noTrail, Suspension(..), Frame, frameCodeDbId, frameEnv)
+import Eval (Env, Val(..), EvalError(..), Thunk(..), Trail(..), Trailing, noTrail, Suspension(..), Frame, frameCodeDbId, frameEnv, eitherList)
 import qualified Eval as Eval
 import CodeDb (CodeDbId (..), codeDbIdText)
 import qualified CodeDbIdGen
@@ -145,6 +145,10 @@ minus = Builtin "-" ["-_1", "-_2"] . FnBody $ \i e -> do
   pure $ Primitive $ Prim.Number $ n - m
 
 
+boolNot :: Builtin
+boolNot = Builtin "not" ["not_1"] . FnBody $ \i e -> do
+  n <- getNumber i "builtin-+-+_1" e
+  pure $ Primitive $ Prim.Number $ if n == 0 then 1 else 0
 
 listConcat :: Builtin
 listConcat = Builtin "listConcat" ["listConcat_1", "listConcat_2"] . FnBody $ \i e -> do
@@ -163,17 +167,37 @@ listMap = Builtin "listMap" ["listMap_f", "listMap_list"] . EvalFnBody $ \i e ev
   let thunks = do (thunkNeeded, thunkEnv, thunkBody) <- getThunkable i "builtin-listMap-listMap_f" e
                   list <- getList i "builtin-listMap-listMap_list" e
                   case Set.toList thunkNeeded of
-                    [argId] -> pure [ Thunk Set.empty (Map.insert argId elem thunkEnv) thunkBody
+                    [argId] -> trace ("Mapping into " ++ show argId ++ " of " ++ (show $ thunkBody ^. Id.id)) $
+                               pure [ Thunk Set.empty (Map.insert argId elem thunkEnv) thunkBody
                                     | elem <- list]
                     [] -> Left [TypeError i "No arg for listMap_f"]
                     _ -> Left [TypeError i "Too many args for listMap_f"]
   case thunks of
     Left e -> pure $ Left e
-    Right thunkList -> do eitherTrails <- mapM eval thunkList
-                          let (errors, successes) = partitionEithers eitherTrails
-                          case errors of
-                            [] -> pure $ Right $ ValList <$> sequenceA successes
-                            es -> pure $ Left $ concat es
+    Right thunkList -> do eitherTrails <- eitherList <$> mapM eval thunkList
+                          case eitherTrails of
+                            Right ts -> pure $ Right $ ValList <$> sequenceA ts
+                            Left es -> pure $ Left es
+
+listFilter :: Builtin
+listFilter = Builtin "listFilter" ["listFilter_f", "listFilter_list"] . EvalFnBody $ \i e eval -> do
+  let either_list = getList i "builtin-listFilter-listFilter_list" e
+  let thunks = do (thunkNeeded, thunkEnv, thunkBody) <- getThunkable i "builtin-listFilter-listFilter_f" e
+                  list <- either_list
+                  case Set.toList thunkNeeded of
+                    [argId] -> pure [ Thunk Set.empty (Map.insert argId elem thunkEnv) thunkBody
+                                    | elem <- list]
+                    [] -> Left [TypeError i "No arg for listFilter_f"]
+                    _ -> Left [TypeError i "Too many args for listFilter_f"]
+  case thunks of
+    Left e -> pure $ Left e
+    Right thunkList -> do either_trails <- eitherList <$> mapM eval thunkList
+                          pure $ do list <- either_list
+                                    ts <- either_trails
+                                    let trail_vs = sequenceA ts
+                                    let matchListVs vs = zipWith (\l v -> if v == Primitive (Prim.Number 0) then Nothing else Just l) list vs
+                                    let trail_filtered = (\vs -> catMaybes . matchListVs $ vs) <$> trail_vs
+                                    pure $ ValList <$> trail_filtered
 
 
 listEmpty :: Builtin
@@ -212,11 +236,13 @@ frameResult = Builtin "frameResult" ["frameResult_frame"] . ResolvedFnBody $ \_ 
 htmlElementEvents :: Builtin
 htmlElementEvents = Builtin "htmlElementEvents" ["htmlElementEvents_element"] . FnBody $ \i e -> do
   element <- getList i "builtin-htmlElementEvents-htmlElementEvents_element" e
+  let eventsByToken token = trace ("LOOKUP OF events-" ++ T.unpack token) $
+                            case Map.lookup (CodeDbId $ "events-" `T.append` token) e of
+                              Just v -> v
+                              Nothing -> ValList []
   case element of
-    [Primitive (Prim.Text "button"), _, Primitive (Prim.Text token)] -> trace ("LOOKUP OF events-" ++ T.unpack token) $
-                                                                        pure $ case Map.lookup (CodeDbId $ "events-" `T.append` token) e of
-                                                                                 Just v -> v
-                                                                                 Nothing -> ValList []
+    [Primitive (Prim.Text "button"), _, Primitive (Prim.Text token)] -> pure $ eventsByToken token
+    [Primitive (Prim.Text "textInput"), Primitive (Prim.Text token)] -> pure $ eventsByToken token
     _ -> Left [TypeError i $ T.pack $ show element ++ " is not an element with events"]
 
 
@@ -231,6 +257,20 @@ htmlButton = Builtin "htmlButton" ["htmlButton_text"] . ResolvedFnBody $ \magic 
   pure $ do
     text <- getText i "builtin-htmlButton-htmlButton_text" e
     pure $ noTrail $ ValList [Primitive $ Prim.Text "button", Primitive $ Prim.Text text, Primitive $ Prim.Text buttonToken]
+
+htmlTextInput :: Builtin
+htmlTextInput = Builtin "htmlTextInput" [] . ResolvedFnBody $ \magic i e ch_resolved -> do
+  let textToken = T.pack . show $ magic
+  pure $ do
+    pure $ noTrail $ ValList [Primitive $ Prim.Text "textInput", Primitive $ Prim.Text textToken]
+
+
+htmlTextInputText :: Builtin
+htmlTextInputText = Builtin "htmlTextInput" [] . ResolvedFnBody $ \magic i e ch_resolved -> do
+  let textToken = T.pack . show $ magic
+  pure $ do
+    pure $ noTrail $ ValList [Primitive $ Prim.Text "textInput", Primitive $ Prim.Text textToken]
+
 
 
 suspensionFrameList :: Builtin
@@ -255,10 +295,10 @@ suspensionFrames trail (Suspension suspensionResolvedId suspensionEnv suspension
 
 builtins :: [Builtin]
 builtins = [ plus, minus
-           , listConcat, listAdd, listEmpty, listMap, listLength, listSum
+           , listConcat, listAdd, listEmpty, listMap, listFilter, listLength, listSum
            , numberToText
            , suspensionFrameList, frameArg, frameResult
-           , htmlText, htmlButton, htmlElementEvents]
+           , htmlText, htmlButton, htmlTextInput, htmlElementEvents]
 
 builtinId :: Builtin -> Id
 builtinId builtin = "builtin-" `T.append` (builtin ^. name)

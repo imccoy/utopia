@@ -3,8 +3,9 @@ module Main where
 import Prelude hiding (id)
 
 import Debug.Trace
+import qualified Unsafe.Coerce
 
-import           Control.Monad (void)
+import           Control.Monad (void, filterM, join)
 import qualified Control.Monad.Adaptive as Adaptive
 import           Control.Monad.Adaptive (inM)
 import qualified Data.IORef as IORef
@@ -12,6 +13,7 @@ import           Data.IORef (IORef)
 import qualified Data.JSString as JSS
 import qualified Data.Map as Map
 import           Data.Map (Map)
+import           Data.Maybe (fromMaybe, catMaybes)
 import qualified Data.Text as T
 import           Data.Text (Text)
 
@@ -37,7 +39,7 @@ textDiv x = E.div () [ch|c|]
   where
     c = E.text . JSS.pack $ x
 
-data Event = ClickEvent
+data Event = ClickEvent | ChangeEvent Text
   deriving (Eq, Show)
 
 type AllEvents = Map Text [Event]
@@ -46,6 +48,12 @@ addEvent :: Event -> Text -> AllEvents -> AllEvents
 addEvent event text allEvents = let result = addEvent' event text allEvents
                                  in trace ("ADDED EVENT " ++ show result) result
 addEvent' event = Map.alter (\events -> (event:) <$> (events `mappend` (Just []))) 
+
+inputTextFromEvent :: Ev.Event -> IO (Maybe Text)
+inputTextFromEvent ev = do let evVal = (Unsafe.Coerce.unsafeCoerce ev :: JSVal)
+                           v <- [js| `evVal.target.value |]
+                           pure v
+
 
 renderVal :: (Text -> Event -> IO ()) -> Val m r i -> VNode
 renderVal onEvent (ValList [ Primitive (Text "text")
@@ -58,6 +66,13 @@ renderVal onEvent (ValList [ Primitive (Text "button")
                                          , Ev.click (\e -> onEvent token ClickEvent)
                                          )
                                          [E.text . JSS.pack . T.unpack $ label]
+renderVal onEvent (ValList [ Primitive (Text "textInput")
+                           , Primitive (Text token)
+                           ]) = E.input ( A.name . JSS.pack . T.unpack $ token
+                                        , Ev.change (\e -> inputTextFromEvent e >>= onEvent token . ChangeEvent . fromMaybe "")
+                                        )
+                                        ([] :: [VNode])
+
 renderVal onEvent (ValList elems) = E.div () $ map (renderVal onEvent) elems
 
 envFromEvents :: Map Text [Event] -> Map CodeDbId (Val IO IORef CodeDbId)
