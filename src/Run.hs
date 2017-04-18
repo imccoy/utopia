@@ -95,13 +95,15 @@ iterateTrail m_trail m_evalResult = do
   inCh (readMod m_evalResult) >>= 
     \case
       Right (Eval.Trailing newTrail result) -> do trail1 <- inCh (readMod m_trail)
-                                                  if trail1 == newTrail
-                                                    then do --inM $ putStrLn "ITERATE TRAIL DONE"
-                                                            --inM $ Eval.printTrail newTrail
+                                                  let mergedTrails = Set.union trail1 newTrail
+                                                  if trail1 == mergedTrails
+
+                                                    then do -- inM $ putStrLn "ITERATE TRAIL DONE"
+                                                            -- inM $ Eval.printTrail newTrail
                                                             pure $ Right result
-                                                    else do --inM $ putStrLn "ITERATE TRAIL"
-                                                            --inM $ Eval.printTrail newTrail
-                                                            change m_trail newTrail
+                                                    else do -- inM $ putStrLn $ T.pack $ "ITERATE TRAIL" ++ show (Set.size trail1) ++ " " ++ show (Set.size newTrail) ++ " "
+                                                            -- inM $ Eval.printTrail newTrail
+                                                            change m_trail mergedTrails
                                                             propagate
                                                             iterateTrail m_trail m_evalResult
       Left e -> pure $ Left e

@@ -149,7 +149,7 @@ printTrail = mapM_ printTrailElems
   where printTrailElems (Frame parent number codeDbId env result) = 
           do putStrLn $ show codeDbId ++ " " ++ show number ++ " (parent=" ++ show parent ++ ")"
              putStrLn $ "  " ++ show result
-             mapM_ (\(name, v) -> putStrLn ("    " ++ show name ++ " " ++ show v)) $ Map.assocs env 
+             --mapM_ (\(name, v) -> putStrLn ("    " ++ show name ++ " " ++ show v)) $ Map.assocs env 
 
 
 

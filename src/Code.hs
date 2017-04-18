@@ -67,7 +67,7 @@ nestedMaps = [ Binding "main" $ lam [] $
                         ]
              ]
 
-oneshot = nestedMaps
+oneshot = tracey
 
 -- data Event details env = Event Time details env
 -- data EventDetails = ButtonClick
@@ -128,7 +128,9 @@ htmlText :: Exp -> Exp
 htmlText text = app (var "htmlText")
                     [ ("htmlText_text", text) ]
 
-
+numberToText :: Exp -> Exp
+numberToText number = app (var "numberToText")
+                          [("numberToText_number", number)]
 
 frameArg :: Exp -> Exp -> Exp
 frameArg frame arg = app (var "frameArg")
@@ -218,14 +220,13 @@ todoWeb = [ Binding "todoTextBox" $ lam [] $
                                   )
                                   (suspensionFrameList (suspend $ suspendSpec "todoForm" [] []))
                       )
-          , Binding "unsavedTodoForms" $ lam [] $
-              htmlTextLit "hah"
+          , Binding "unsavedTodoForm" $ lam [] $
+              app (var "todoForm") [("todoForm_n", listLength (app (var "savedTodoWidgets") []))]
+              --app (var "todoForm") [("todoForm_n", lit $ Number 0)]
           , Binding "main" $ lam [] $
-              listOf [ app (var "unsavedTodoForms") []
+              listOf [ app (var "unsavedTodoForm") []
                      , app (var "savedTodoWidgets") []
-                     , app (var "todoForm") [("todoForm_n", lit $ Number 0)]
-                     , app (var "todoForm") [("todoForm_n", lit $ Number 1)]
-                     , app (var "todoForm") [("todoForm_n", lit $ Number 2)]
+                     , htmlText (numberToText (listLength (app (var "savedTodoWidgets") [])))
                      ]
           , Binding "clickCount" $ lam ["clickCount_button"] $
              listSum $ listMap (lam ["builtin-listMap-listMap_f-elem"] $
