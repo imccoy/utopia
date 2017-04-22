@@ -36,6 +36,7 @@ data Builtin = Builtin { _name :: Name
                        }
 
 type BuiltinEnv = Env IO IORef CodeDbId
+type BuiltinGlobalEnv = Changeable IO IORef (Eval.GlobalEnv IO IORef CodeDbId)
 type BuiltinVal = Val IO IORef CodeDbId
 type BuiltinThunk = Id.WithId CodeDbId Identity (Thunk IO IORef CodeDbId)
 type BuiltinSuspension = Suspension IO IORef CodeDbId
@@ -43,11 +44,12 @@ type BuiltinTrail = Trail IO IORef CodeDbId
 type BuiltinFrame = Frame IO IORef CodeDbId
 type BuiltinTrailing = Trailing IO IORef CodeDbId
 
-data BuiltinBody = FnBody (CodeDbId -> BuiltinEnv -> Either [EvalError CodeDbId] BuiltinVal)
-                 | ResolvedFnBody (Integer -> CodeDbId -> BuiltinEnv -> Changeable IO IORef (Lam.Resolved CodeDbId) -> Changeable IO IORef (Either [EvalError CodeDbId] (BuiltinTrailing BuiltinVal)))
-                 | TrailFnBody (CodeDbId -> Trail IO IORef CodeDbId -> BuiltinEnv -> Either [EvalError CodeDbId] BuiltinVal)
+data BuiltinBody = FnBody (CodeDbId -> BuiltinEnv -> BuiltinGlobalEnv -> Either [EvalError CodeDbId] BuiltinVal)
+                 | ResolvedFnBody (Integer -> CodeDbId -> BuiltinEnv -> BuiltinGlobalEnv -> Changeable IO IORef (Lam.Resolved CodeDbId) -> Changeable IO IORef (Either [EvalError CodeDbId] (BuiltinTrailing BuiltinVal)))
+                 | TrailFnBody (CodeDbId -> Trail IO IORef CodeDbId -> BuiltinEnv -> BuiltinGlobalEnv -> Either [EvalError CodeDbId] BuiltinVal)
                  | EvalFnBody ( CodeDbId
                               -> BuiltinEnv
+                              -> BuiltinGlobalEnv
                               -> (BuiltinVal -> 
                                   Changeable IO IORef (Either [EvalError CodeDbId] (BuiltinTrailing BuiltinVal)))
                               -> Changeable IO IORef (Either [EvalError CodeDbId] (BuiltinTrailing BuiltinVal)))
@@ -119,7 +121,7 @@ thunkableVal (needed, env, body) = Thunk needed env body
 
 
 numberToText :: Builtin
-numberToText = Builtin "numberToText" ["numberToText_number"] . FnBody $ \i e -> do
+numberToText = Builtin "numberToText" ["numberToText_number"] . FnBody $ \i e g -> do
   n <- getNumber i "builtin-numberToText-numberToText_number" e
   pure $ Primitive $ Prim.Text $ T.pack $ show n
 
@@ -133,37 +135,37 @@ numberToText = Builtin "numberToText" ["numberToText_number"] . FnBody $ \i e ->
 --           b <- askInt arg2
 --           pure $ a + b
 plus :: Builtin
-plus = Builtin "+" ["+_1", "+_2"] . FnBody $ \i e -> do
+plus = Builtin "+" ["+_1", "+_2"] . FnBody $ \i e g -> do
   n <- getNumber i "builtin-+-+_1" e
   m <- getNumber i "builtin-+-+_2" e
   pure $ Primitive $ Prim.Number $ n + m
 
 minus :: Builtin
-minus = Builtin "-" ["-_1", "-_2"] . FnBody $ \i e -> do
+minus = Builtin "-" ["-_1", "-_2"] . FnBody $ \i e g -> do
   n <- getNumber i "builtin----_1" e
   m <- getNumber i "builtin----_2" e
   pure $ Primitive $ Prim.Number $ n - m
 
 
 boolNot :: Builtin
-boolNot = Builtin "not" ["not_1"] . FnBody $ \i e -> do
+boolNot = Builtin "not" ["not_1"] . FnBody $ \i e g -> do
   n <- getNumber i "builtin-+-+_1" e
   pure $ Primitive $ Prim.Number $ if n == 0 then 1 else 0
 
 listConcat :: Builtin
-listConcat = Builtin "listConcat" ["listConcat_1", "listConcat_2"] . FnBody $ \i e -> do
+listConcat = Builtin "listConcat" ["listConcat_1", "listConcat_2"] . FnBody $ \i e g -> do
   n <- getList i "builtin-listConcat-listConcat_1" e
   m <- getList i "builtin-listConcat-listConcat_2" e
   pure $ ValList $ n ++ m
 
 listAdd :: Builtin
-listAdd = Builtin "listAdd" ["listAdd_elem", "listAdd_list"] . FnBody $ \i e -> do
+listAdd = Builtin "listAdd" ["listAdd_elem", "listAdd_list"] . FnBody $ \i e g -> do
   n <- get i "builtin-listAdd-listAdd_elem" e
   m <- getList i "builtin-listAdd-listAdd_list" e
   pure $ ValList $ n:m
 
 listMap :: Builtin
-listMap = Builtin "listMap" ["listMap_f", "listMap_list"] . EvalFnBody $ \i e eval -> do
+listMap = Builtin "listMap" ["listMap_f", "listMap_list"] . EvalFnBody $ \i e g eval -> do
   let thunks = do (thunkNeeded, thunkEnv, thunkBody) <- getThunkable i "builtin-listMap-listMap_f" e
                   list <- getList i "builtin-listMap-listMap_list" e
                   case Set.toList thunkNeeded of
@@ -180,7 +182,7 @@ listMap = Builtin "listMap" ["listMap_f", "listMap_list"] . EvalFnBody $ \i e ev
                             Left es -> pure $ Left es
 
 listFilter :: Builtin
-listFilter = Builtin "listFilter" ["listFilter_f", "listFilter_list"] . EvalFnBody $ \i e eval -> do
+listFilter = Builtin "listFilter" ["listFilter_f", "listFilter_list"] . EvalFnBody $ \i e g eval -> do
   let either_list = getList i "builtin-listFilter-listFilter_list" e
   let thunks = do (thunkNeeded, thunkEnv, thunkBody) <- getThunkable i "builtin-listFilter-listFilter_f" e
                   list <- either_list
@@ -201,16 +203,16 @@ listFilter = Builtin "listFilter" ["listFilter_f", "listFilter_list"] . EvalFnBo
 
 
 listEmpty :: Builtin
-listEmpty = Builtin "listEmpty" [] . FnBody $ \i e -> do
+listEmpty = Builtin "listEmpty" [] . FnBody $ \i e g -> do
   pure $ ValList []
 
 listLength :: Builtin
-listLength = Builtin "listLength" ["listLength_list"] . FnBody $ \i e -> do
+listLength = Builtin "listLength" ["listLength_list"] . FnBody $ \i e g -> do
   list <- getList i "builtin-listLength-listLength_list" e
   pure $ Primitive $ Prim.Number $ fromIntegral $ length list
 
 listSum :: Builtin
-listSum = Builtin "listSum" ["listSum_list"] . FnBody $ \i e -> do
+listSum = Builtin "listSum" ["listSum_list"] . FnBody $ \i e g -> do
   list <- getList i "builtin-listSum-listSum_list" e
   case partitionEithers ((asPrim i >=> asNumber i) <$> list) of
     ([], ints) -> pure $ Primitive $ Prim.Number $ fromIntegral $ sum ints
@@ -218,7 +220,7 @@ listSum = Builtin "listSum" ["listSum_list"] . FnBody $ \i e -> do
 
 
 frameArg :: Builtin
-frameArg = Builtin "frameArg" ["frameArg_frame", "frameArg_arg"] . ResolvedFnBody $ \_ i e ch_resolved -> do
+frameArg = Builtin "frameArg" ["frameArg_frame", "frameArg_arg"] . ResolvedFnBody $ \_ i e g ch_resolved -> do
   resolved <- ch_resolved
   pure $ do
     frame <- getFrame i "builtin-frameArg-frameArg_frame" e
@@ -226,47 +228,46 @@ frameArg = Builtin "frameArg" ["frameArg_frame", "frameArg_arg"] . ResolvedFnBod
     maybe (Left [UndefinedVar i (codeDbIdText argId)]) (Right . noTrail) $ Map.lookup argId (frame ^. Eval.frameEnv)
 
 frameResult :: Builtin
-frameResult = Builtin "frameResult" ["frameResult_frame"] . ResolvedFnBody $ \_ i e ch_resolved -> do
-  resolved <- ch_resolved
+frameResult = Builtin "frameResult" ["frameResult_frame"] . ResolvedFnBody $ \_ i e g ch_resolved -> do
   pure $ do
     frame <- getFrame i "builtin-frameResult-frameResult_frame" e
     pure $ noTrail $ frame ^. Eval.frameResult
 
 
 htmlElementEvents :: Builtin
-htmlElementEvents = Builtin "htmlElementEvents" ["htmlElementEvents_element"] . FnBody $ \i e -> do
-  element <- getList i "builtin-htmlElementEvents-htmlElementEvents_element" e
-  let eventsByToken token = trace ("LOOKUP OF events-" ++ T.unpack token) $
-                            case Map.lookup (CodeDbId $ "events-" `T.append` token) e of
-                              Just v -> v
-                              Nothing -> ValList []
-  case element of
-    [Primitive (Prim.Text "button"), _, Primitive (Prim.Text token)] -> pure $ eventsByToken token
-    [Primitive (Prim.Text "textInput"), Primitive (Prim.Text token)] -> pure $ eventsByToken token
-    _ -> Left [TypeError i $ T.pack $ show element ++ " is not an element with events"]
+htmlElementEvents = Builtin "htmlElementEvents" ["htmlElementEvents_element"] . ResolvedFnBody $ \_ i e g _ -> do
+  let eventsByToken token = flip fmap (Map.lookup (CodeDbId $ "events-" `T.append` token) . Eval.unGlobalEnv <$> g) $ \case
+                              Just v -> pure . pure $ v
+                              Nothing -> pure . pure . ValList $ []
+  case getList i "builtin-htmlElementEvents-htmlElementEvents_element" e of
+    Left e -> pure $ Left e
+    Right element -> case element of
+                       [Primitive (Prim.Text "button"), _, Primitive (Prim.Text token)] -> eventsByToken token
+                       [Primitive (Prim.Text "textInput"), Primitive (Prim.Text token)] -> eventsByToken token
+                       _ -> pure $ Left [TypeError i $ T.pack $ show element ++ " is not an element with events"]
 
 
 htmlText :: Builtin
-htmlText = Builtin "htmlText" ["htmlText_text"] . FnBody $ \i e -> do
+htmlText = Builtin "htmlText" ["htmlText_text"] . FnBody $ \i e g -> do
   text <- getText i "builtin-htmlText-htmlText_text" e
   pure $ ValList [Primitive $ Prim.Text "text", Primitive $ Prim.Text text]
 
 htmlButton :: Builtin
-htmlButton = Builtin "htmlButton" ["htmlButton_text"] . ResolvedFnBody $ \magic i e ch_resolved -> do
+htmlButton = Builtin "htmlButton" ["htmlButton_text"] . ResolvedFnBody $ \magic i e g ch_resolved -> do
   let buttonToken = T.pack . show $ magic
   pure $ do
     text <- getText i "builtin-htmlButton-htmlButton_text" e
     pure $ noTrail $ ValList [Primitive $ Prim.Text "button", Primitive $ Prim.Text text, Primitive $ Prim.Text buttonToken]
 
 htmlTextInput :: Builtin
-htmlTextInput = Builtin "htmlTextInput" [] . ResolvedFnBody $ \magic i e ch_resolved -> do
+htmlTextInput = Builtin "htmlTextInput" [] . ResolvedFnBody $ \magic i e g ch_resolved -> do
   let textToken = T.pack . show $ magic
   pure $ do
     pure $ noTrail $ ValList [Primitive $ Prim.Text "textInput", Primitive $ Prim.Text textToken]
 
 
 htmlTextInputText :: Builtin
-htmlTextInputText = Builtin "htmlTextInput" [] . ResolvedFnBody $ \magic i e ch_resolved -> do
+htmlTextInputText = Builtin "htmlTextInput" [] . ResolvedFnBody $ \magic i e g ch_resolved -> do
   let textToken = T.pack . show $ magic
   pure $ do
     pure $ noTrail $ ValList [Primitive $ Prim.Text "textInput", Primitive $ Prim.Text textToken]
@@ -274,7 +275,7 @@ htmlTextInputText = Builtin "htmlTextInput" [] . ResolvedFnBody $ \magic i e ch_
 
 
 suspensionFrameList :: Builtin
-suspensionFrameList = Builtin "suspensionFrameList" ["suspensionFrameList_suspension"] . TrailFnBody $ \i trail e -> do
+suspensionFrameList = Builtin "suspensionFrameList" ["suspensionFrameList_suspension"] . TrailFnBody $ \i trail e g -> do
   suspension <- getSuspension i "builtin-suspensionFrameList-suspensionFrameList_suspension" e
   let frames = suspensionFrames trail suspension
   pure $ ValList [ ValFrame frame
@@ -323,9 +324,9 @@ env :: Env IO IORef CodeDbId
 env = Map.fromList 
         [ (CodeDbId $ builtinId builtin
           , Thunk (builtinArgsIdsSet builtin) Map.empty . Id.withId (CodeDbId $ builtinId builtin) $ case builtin ^. body of
-                                                            FnBody fn -> ThunkFn $ \env -> do fn (CodeDbId $ builtinId builtin) env
-                                                            ResolvedFnBody fn -> ThunkResolvedFn $ \magic env resolved -> do fn magic (CodeDbId $ builtinId builtin) env resolved
-                                                            EvalFnBody fn -> ThunkEvalFn $ \env eval -> fn (CodeDbId $ builtinId builtin) env eval
-                                                            TrailFnBody fn -> ThunkTrailFn $ \trail env -> do fn (CodeDbId $ builtinId builtin) trail env
+                                                            FnBody fn -> ThunkFn $ \env globalEnv -> do fn (CodeDbId $ builtinId builtin) env globalEnv
+                                                            ResolvedFnBody fn -> ThunkResolvedFn $ \magic env globalEnv resolved -> do fn magic (CodeDbId $ builtinId builtin) env globalEnv resolved
+                                                            EvalFnBody fn -> ThunkEvalFn $ \env globalEnv eval -> fn (CodeDbId $ builtinId builtin) env globalEnv eval
+                                                            TrailFnBody fn -> ThunkTrailFn $ \trail env globalEnv -> do fn (CodeDbId $ builtinId builtin) trail env globalEnv
           )
         | builtin <- builtins]

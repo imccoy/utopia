@@ -72,7 +72,7 @@ evalWithTrail m_bindingsWithIds ch_bindingsWithMod ch_initialEnv m_trail = do
                                                                          Nothing -> let x = fromIntegral $ Map.size map
                                                                                      in (Map.insert (i, env, parentMagicNumbers) x map, x)
 
-                                                  evaluated <- Eval.eval m_resolved magicNumber [] ch_toplevelEnv m_trail exp >>= readMod
+                                                  evaluated <- Eval.eval m_resolved (Eval.GlobalEnv <$> ch_toplevelEnv) magicNumber [] (pure Map.empty) m_trail exp >>= readMod
                                                   pure $ (_Left %~ map RuntimeError) $ evaluated
                 (Nothing, _) -> pure . Left $ [RuntimeError $ Eval.UndefinedVar (CodeDbId "toplevel") "main"]
                 (_, Left resolveErrors) -> pure . Left $ [ParseError resolveErrors]
