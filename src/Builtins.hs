@@ -4,8 +4,6 @@ import Debug.Trace
 
 import Control.Lens
 import Control.Monad ((>=>))
-import Control.Monad.Adaptive
-import Control.Monad.Adaptive.Ref
 import Data.Either (partitionEithers)
 import Data.IORef
 import qualified Data.List as List
@@ -18,7 +16,7 @@ import qualified Data.Text as T
 
 
 import qualified Id
-import Eval (Env, Val(..), EvalError(..), Thunk(..), Trail(..), Trailing, noTrail, Suspension(..), Frame, frameCodeDbId, frameEnv, eitherList)
+import Eval (Env, Val(..), EvalError(..), Thunk(..), Trail(..), Trailing, noTrail, Suspension(..), Frame, frameCodeDbId, eitherList)
 import qualified Eval as Eval
 import CodeDb (CodeDbId (..), codeDbIdText)
 import qualified CodeDbIdGen
@@ -35,24 +33,24 @@ data Builtin = Builtin { _name :: Name
                        , _body :: BuiltinBody
                        }
 
-type BuiltinEnv = Env IO IORef CodeDbId
-type BuiltinGlobalEnv = Changeable IO IORef (Eval.GlobalEnv IO IORef CodeDbId)
-type BuiltinVal = Val IO IORef CodeDbId
-type BuiltinThunk = Id.WithId CodeDbId Identity (Thunk IO IORef CodeDbId)
-type BuiltinSuspension = Suspension IO IORef CodeDbId
-type BuiltinTrail = Trail IO IORef CodeDbId
-type BuiltinFrame = Frame IO IORef CodeDbId
-type BuiltinTrailing = Trailing IO IORef CodeDbId
+type BuiltinEnv = Env CodeDbId
+type BuiltinGlobalEnv = Eval.GlobalEnv CodeDbId
+type BuiltinVal = Val CodeDbId
+type BuiltinThunk = Id.WithId CodeDbId Identity (Thunk CodeDbId)
+type BuiltinSuspension = Suspension CodeDbId
+type BuiltinTrail = Trail CodeDbId
+type BuiltinFrame = Frame CodeDbId
+type BuiltinTrailing = Trailing CodeDbId
 
 data BuiltinBody = FnBody (CodeDbId -> BuiltinEnv -> BuiltinGlobalEnv -> Either [EvalError CodeDbId] BuiltinVal)
-                 | ResolvedFnBody (Integer -> CodeDbId -> BuiltinEnv -> BuiltinGlobalEnv -> Changeable IO IORef (Lam.Resolved CodeDbId) -> Changeable IO IORef (Either [EvalError CodeDbId] (BuiltinTrailing BuiltinVal)))
-                 | TrailFnBody (CodeDbId -> Trail IO IORef CodeDbId -> BuiltinEnv -> BuiltinGlobalEnv -> Either [EvalError CodeDbId] BuiltinVal)
+                 | ResolvedFnBody (BuiltinFrame -> CodeDbId -> BuiltinEnv -> BuiltinGlobalEnv -> Lam.Resolved CodeDbId -> Either [EvalError CodeDbId] (BuiltinTrailing BuiltinVal))
+                 | TrailFnBody (CodeDbId -> Trail CodeDbId -> BuiltinEnv -> BuiltinGlobalEnv -> Either [EvalError CodeDbId] BuiltinVal)
                  | EvalFnBody ( CodeDbId
                               -> BuiltinEnv
                               -> BuiltinGlobalEnv
                               -> (BuiltinVal -> 
-                                  Changeable IO IORef (Either [EvalError CodeDbId] (BuiltinTrailing BuiltinVal)))
-                              -> Changeable IO IORef (Either [EvalError CodeDbId] (BuiltinTrailing BuiltinVal)))
+                                  Either [EvalError CodeDbId] (BuiltinTrailing BuiltinVal))
+                              -> Either [EvalError CodeDbId] (BuiltinTrailing BuiltinVal))
 
 makeLenses ''Builtin
 
@@ -77,7 +75,7 @@ getSuspension i argId env = get i argId env >>= \v ->
 getPrim :: CodeDbId -> T.Text -> BuiltinEnv -> Either [EvalError CodeDbId] Prim.Prim
 getPrim i argId env = get i argId env >>= asPrim i
 
-getFrame :: CodeDbId -> T.Text -> BuiltinEnv -> Either [EvalError CodeDbId] (Frame IO IORef CodeDbId)
+getFrame :: CodeDbId -> T.Text -> BuiltinEnv -> Either [EvalError CodeDbId] (Frame CodeDbId)
 getFrame i argId env = get i argId env >>= \v ->
   case v of
     ValFrame frame -> Right frame
@@ -166,40 +164,30 @@ listAdd = Builtin "listAdd" ["listAdd_elem", "listAdd_list"] . FnBody $ \i e g -
 
 listMap :: Builtin
 listMap = Builtin "listMap" ["listMap_f", "listMap_list"] . EvalFnBody $ \i e g eval -> do
-  let thunks = do (thunkNeeded, thunkEnv, thunkBody) <- getThunkable i "builtin-listMap-listMap_f" e
-                  list <- getList i "builtin-listMap-listMap_list" e
-                  case Set.toList thunkNeeded of
-                    [argId] -> trace ("Mapping into " ++ show argId ++ " of " ++ (show $ thunkBody ^. Id.id)) $
-                               pure [ Thunk Set.empty (Map.insert argId elem thunkEnv) thunkBody
-                                    | elem <- list]
-                    [] -> Left [TypeError i "No arg for listMap_f"]
-                    _ -> Left [TypeError i "Too many args for listMap_f"]
-  case thunks of
-    Left e -> pure $ Left e
-    Right thunkList -> do eitherTrails <- eitherList <$> mapM eval thunkList
-                          case eitherTrails of
-                            Right ts -> pure $ Right $ ValList <$> sequenceA ts
-                            Left es -> pure $ Left es
+  thunks <- do (thunkNeeded, thunkEnv, thunkBody) <- getThunkable i "builtin-listMap-listMap_f" e
+               list <- getList i "builtin-listMap-listMap_list" e
+               case Set.toList thunkNeeded of
+                 [argId] -> trace ("Mapping into " ++ show argId ++ " of " ++ (show $ thunkBody ^. Id.id)) $
+                            pure [ Thunk Set.empty (Map.insert argId elem thunkEnv) thunkBody
+                                 | elem <- list]
+                 [] -> Left [TypeError i "No arg for listMap_f"]
+                 _ -> Left [TypeError i "Too many args for listMap_f"]
+  vals <- mapM eval thunks
+  pure $ ValList <$> sequenceA vals
 
 listFilter :: Builtin
 listFilter = Builtin "listFilter" ["listFilter_f", "listFilter_list"] . EvalFnBody $ \i e g eval -> do
-  let either_list = getList i "builtin-listFilter-listFilter_list" e
-  let thunks = do (thunkNeeded, thunkEnv, thunkBody) <- getThunkable i "builtin-listFilter-listFilter_f" e
-                  list <- either_list
-                  case Set.toList thunkNeeded of
-                    [argId] -> pure [ Thunk Set.empty (Map.insert argId elem thunkEnv) thunkBody
-                                    | elem <- list]
-                    [] -> Left [TypeError i "No arg for listFilter_f"]
-                    _ -> Left [TypeError i "Too many args for listFilter_f"]
-  case thunks of
-    Left e -> pure $ Left e
-    Right thunkList -> do either_trails <- eitherList <$> mapM eval thunkList
-                          pure $ do list <- either_list
-                                    ts <- either_trails
-                                    let trail_vs = sequenceA ts
-                                    let matchListVs vs = zipWith (\l v -> if v == Primitive (Prim.Number 0) then Nothing else Just l) list vs
-                                    let trail_filtered = (\vs -> catMaybes . matchListVs $ vs) <$> trail_vs
-                                    pure $ ValList <$> trail_filtered
+  list <- getList i "builtin-listFilter-listFilter_list" e
+  thunks <- do (thunkNeeded, thunkEnv, thunkBody) <- getThunkable i "builtin-listFilter-listFilter_f" e
+               case Set.toList thunkNeeded of
+                 [argId] -> pure [ Thunk Set.empty (Map.insert argId elem thunkEnv) thunkBody
+                                 | elem <- list]
+                 [] -> Left [TypeError i "No arg for listFilter_f"]
+                 _ -> Left [TypeError i "Too many args for listFilter_f"]
+  ts <- sequenceA <$> mapM eval thunks
+  let matchListVs vs = zipWith (\l v -> if v == Primitive (Prim.Number 0) then Nothing else Just l) list vs
+  let trail_filtered = (\vs -> catMaybes . matchListVs $ vs) <$> ts
+  pure $ ValList <$> trail_filtered
 
 
 listEmpty :: Builtin
@@ -220,31 +208,23 @@ listSum = Builtin "listSum" ["listSum_list"] . FnBody $ \i e g -> do
 
 
 frameArg :: Builtin
-frameArg = Builtin "frameArg" ["frameArg_frame", "frameArg_arg"] . ResolvedFnBody $ \_ i e g ch_resolved -> do
-  resolved <- ch_resolved
-  pure $ do
-    frame <- getFrame i "builtin-frameArg-frameArg_frame" e
-    (Suspension argId _ _) <- getSuspension i "builtin-frameArg-frameArg_arg" e
-    maybe (Left [UndefinedVar i (codeDbIdText argId)]) (Right . noTrail) $ Map.lookup argId (frame ^. Eval.frameEnv)
-
-frameResult :: Builtin
-frameResult = Builtin "frameResult" ["frameResult_frame"] . ResolvedFnBody $ \_ i e g ch_resolved -> do
-  pure $ do
-    frame <- getFrame i "builtin-frameResult-frameResult_frame" e
-    pure $ noTrail $ frame ^. Eval.frameResult
-
+frameArg = Builtin "frameArg" ["frameArg_frame", "frameArg_arg"] . ResolvedFnBody $ \_ i e g resolved -> do
+  frame <- getFrame i "builtin-frameArg-frameArg_frame" e
+  (Suspension argId _ _) <- getSuspension i "builtin-frameArg-frameArg_arg" e
+  maybe (Left [UndefinedVar i (codeDbIdText argId)]) (Right . noTrail) $ Map.lookup argId (frame ^. Eval.frameEnv)
 
 htmlElementEvents :: Builtin
 htmlElementEvents = Builtin "htmlElementEvents" ["htmlElementEvents_element"] . ResolvedFnBody $ \_ i e g _ -> do
-  let eventsByToken token = flip fmap (Map.lookup (CodeDbId $ "events-" `T.append` token) . Eval.unGlobalEnv <$> g) $ \case
-                              Just v -> pure . pure $ v
-                              Nothing -> pure . pure . ValList $ []
+  let eventsByToken frame = case Eval.lookupVarByResolvedId e g (CodeDbId $ "events-" `T.append` (T.pack . show $ frame)) of
+                              Just (ValList v) -> Right . noTrail $ ValList v
+                              Nothing -> Right . noTrail . ValList $ []
+                              Just v -> Left [TypeError i $ T.pack $ "non-events " ++ show v ++ " at " ++ show frame]
   case getList i "builtin-htmlElementEvents-htmlElementEvents_element" e of
-    Left e -> pure $ Left e
+    Left e -> Left e
     Right element -> case element of
-                       [Primitive (Prim.Text "button"), _, Primitive (Prim.Text token)] -> eventsByToken token
-                       [Primitive (Prim.Text "textInput"), Primitive (Prim.Text token)] -> eventsByToken token
-                       _ -> pure $ Left [TypeError i $ T.pack $ show element ++ " is not an element with events"]
+                       [Primitive (Prim.Text "button"), _, ValFrame frame] -> eventsByToken frame
+                       [Primitive (Prim.Text "textInput"), ValFrame frame] -> eventsByToken frame
+                       _ -> Left [TypeError i $ T.pack $ show element ++ " is not an element with events"]
 
 
 htmlText :: Builtin
@@ -253,46 +233,63 @@ htmlText = Builtin "htmlText" ["htmlText_text"] . FnBody $ \i e g -> do
   pure $ ValList [Primitive $ Prim.Text "text", Primitive $ Prim.Text text]
 
 htmlButton :: Builtin
-htmlButton = Builtin "htmlButton" ["htmlButton_text"] . ResolvedFnBody $ \magic i e g ch_resolved -> do
-  let buttonToken = T.pack . show $ magic
-  pure $ do
-    text <- getText i "builtin-htmlButton-htmlButton_text" e
-    pure $ noTrail $ ValList [Primitive $ Prim.Text "button", Primitive $ Prim.Text text, Primitive $ Prim.Text buttonToken]
+htmlButton = Builtin "htmlButton" ["htmlButton_text"] . ResolvedFnBody $ \frame i e g resolved -> do
+  text <- getText i "builtin-htmlButton-htmlButton_text" e
+  pure $ noTrail $ ValList [Primitive $ Prim.Text "button", Primitive $ Prim.Text text, ValFrame frame]
 
 htmlTextInput :: Builtin
-htmlTextInput = Builtin "htmlTextInput" [] . ResolvedFnBody $ \magic i e g ch_resolved -> do
-  let textToken = T.pack . show $ magic
-  pure $ do
-    pure $ noTrail $ ValList [Primitive $ Prim.Text "textInput", Primitive $ Prim.Text textToken]
+htmlTextInput = Builtin "htmlTextInput" [] . ResolvedFnBody $ \frame i e g resolved -> do
+  pure $ noTrail $ ValList [Primitive $ Prim.Text "textInput", ValFrame frame]
 
 
 htmlTextInputText :: Builtin
-htmlTextInputText = Builtin "htmlTextInput" [] . ResolvedFnBody $ \magic i e g ch_resolved -> do
+htmlTextInputText = Builtin "htmlTextInput" [] . ResolvedFnBody $ \magic i e g resolved -> do
   let textToken = T.pack . show $ magic
-  pure $ do
-    pure $ noTrail $ ValList [Primitive $ Prim.Text "textInput", Primitive $ Prim.Text textToken]
+  pure $ noTrail $ ValList [Primitive $ Prim.Text "textInput", Primitive $ Prim.Text textToken]
 
 
 
 suspensionFrameList :: Builtin
 suspensionFrameList = Builtin "suspensionFrameList" ["suspensionFrameList_suspension"] . TrailFnBody $ \i trail e g -> do
   suspension <- getSuspension i "builtin-suspensionFrameList-suspensionFrameList_suspension" e
-  let frames = suspensionFrames trail suspension
   pure $ ValList [ ValFrame frame
-                 | frame <- frames]
-  
+                 | frame <- suspensionFrames trail suspension]
+
+iterateUntilNothing :: (a -> Maybe a) -> a -> [a]
+iterateUntilNothing f e = e:go e
+  where go e = case f e of
+                 Nothing -> []
+                 (Just e') -> e':go e'
+
+iterateUntilNothing' :: (Show a) => (a -> Maybe a) -> Maybe a -> [a]
+iterateUntilNothing' f = fromMaybe [] . fmap (iterateUntilNothing f)
+
+
 suspensionFrames :: BuiltinTrail -> BuiltinSuspension -> [BuiltinFrame]
 suspensionFrames trail (Suspension suspensionResolvedId suspensionEnv suspensionParents) = 
   [ frame
-  | frame <- Set.toList trail
+  | (frame, result) <- Set.toList trail
   , frame ^. frameCodeDbId == suspensionResolvedId
-  , Map.isSubmapOf suspensionEnv (frame ^. frameEnv)
-  , parentsAreAncestors trail (frame ^. Eval.frameAncestors) suspensionParents
+  , Map.isSubmapOf suspensionEnv (frame ^. Eval.frameEnv)
+  , suspensionParentsMatchFrameAncestors (frame ^. Eval.frameParent) suspensionParents
   ]
-  where parentsAreAncestors _ _ [] = True
-        parentsAreAncestors trail frameAncestorNumbers suspensionParents = all (suspensionMatchesAFrameNumber trail frameAncestorNumbers) suspensionParents
-        suspensionMatchesAFrameNumber trail frameNumbers suspension = let frames = suspensionFrames trail suspension
-                                                                       in not . null $ List.intersect frameNumbers ((^. Eval.frameNumber) <$> frames)
+  where suspensionParentsMatchFrameAncestors parentFrame suspensionParents = all (suspensionMatchesAFrame (iterateUntilNothing' (^. Eval.frameParent) parentFrame)) suspensionParents
+
+        suspensionMatchesAFrame parentFrames suspension = not . null $ List.intersect (suspensionFrames trail suspension) parentFrames
+
+
+frameResult :: Builtin
+frameResult = Builtin "frameResult" ["frameResult_frame"] . TrailFnBody $ \i trail e g -> do
+  targetFrame <- getFrame i "builtin-frameResult-frameResult_frame" e
+  let results = [ result
+                | (frame, result) <- Set.toList trail
+                , frame == targetFrame
+                ]
+  case results of
+    [] -> Left [UndefinedVar i "NO RESULT"]
+    xs -> Right $ last xs
+
+
 
 builtins :: [Builtin]
 builtins = [ plus, minus
@@ -320,7 +317,7 @@ builtinArgsIdsSet = Set.fromList . map snd . builtinArgsIds
 allArgIds :: Map Name CodeDbId
 allArgIds = Map.fromList $ foldMap builtinArgsIds builtins
 
-env :: Env IO IORef CodeDbId
+env :: Env CodeDbId
 env = Map.fromList 
         [ (CodeDbId $ builtinId builtin
           , Thunk (builtinArgsIdsSet builtin) Map.empty . Id.withId (CodeDbId $ builtinId builtin) $ case builtin ^. body of

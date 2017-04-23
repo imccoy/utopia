@@ -4,7 +4,6 @@ import Prelude hiding (id, putStrLn)
 
 import Control.Lens hiding (children, mapping)
 import Control.Monad.Reader
-import Control.Monad.Adaptive
 import qualified Data.Map as Map
 import Data.Set (Set)
 import qualified Data.Set as Set
@@ -70,9 +69,8 @@ main = do
 --    propagate
 --    inM . putStrLn . T.pack . show =<< ch_evaluated
 
-  run $ do
-    (m_bindingsWithIds, ch_evaluated) <- runProjection oneshotBindingsWithIds
-    inM . putStrLn . T.pack . (either show Eval.pprintVal) =<< ch_evaluated
+  let evaluated = runProjection oneshotBindingsWithIds
+  putStrLn . T.pack . (either show Eval.pprintVal) $ evaluated
     
 
 --  let html = renderHtml $ Html.mappingHtml reversedDiffResult diffResult

@@ -6,8 +6,6 @@ import Debug.Trace
 import qualified Unsafe.Coerce
 
 import           Control.Monad (void, filterM, join)
-import qualified Control.Monad.Adaptive as Adaptive
-import           Control.Monad.Adaptive (inM)
 import qualified Data.IORef as IORef
 import           Data.IORef (IORef)
 import qualified Data.JSString as JSS
@@ -30,7 +28,7 @@ import           GHCJS.Types
 import qualified Code
 import CodeDb (CodeDbId(..))
 import Prim (Prim(..))
-import qualified Eval (Val(..))
+import qualified Eval
 import Eval (Val(..))
 import qualified Run
 
@@ -42,11 +40,11 @@ textDiv x = E.div () [ch|c|]
 data Event = ClickEvent | ChangeEvent Text
   deriving (Eq, Show)
 
-type AllEvents = Map Text [Event]
+type AllEvents = Map (Eval.Frame CodeDbId) [Event]
 
-addEvent :: Event -> Text -> AllEvents -> AllEvents
-addEvent event text allEvents = let result = addEvent' event text allEvents
-                                 in trace ("ADDED EVENT " ++ show result) result
+addEvent :: Event -> Eval.Frame CodeDbId -> AllEvents -> (AllEvents,AllEvents)
+addEvent event frame allEvents = let result = addEvent' event frame allEvents
+                                  in (result,result)
 addEvent' event = Map.alter (\events -> (event:) <$> (events `mappend` (Just []))) 
 
 inputTextFromEvent :: Ev.Event -> IO (Maybe Text)
@@ -55,46 +53,35 @@ inputTextFromEvent ev = do let evVal = (Unsafe.Coerce.unsafeCoerce ev :: JSVal)
                            pure v
 
 
-renderVal :: (Text -> Event -> IO ()) -> Val m r i -> VNode
+renderVal :: (Show i) => (Eval.Frame i -> Event -> IO ()) -> Val i -> VNode
 renderVal onEvent (ValList [ Primitive (Text "text")
                            , Primitive (Text t)
                            ]) = textDiv . T.unpack $ t
 renderVal onEvent (ValList [ Primitive (Text "button")
                            , Primitive (Text label)
-                           , Primitive (Text token)
-                           ]) = E.button ( A.name . JSS.pack . T.unpack $ token
-                                         , Ev.click (\e -> onEvent token ClickEvent)
-                                         )
+                           , ValFrame frame
+                           ]) = E.button (Ev.click (\e -> onEvent frame ClickEvent))
                                          [E.text . JSS.pack . T.unpack $ label]
 renderVal onEvent (ValList [ Primitive (Text "textInput")
-                           , Primitive (Text token)
-                           ]) = E.input ( A.name . JSS.pack . T.unpack $ token
-                                        , Ev.change (\e -> inputTextFromEvent e >>= onEvent token . ChangeEvent . fromMaybe "")
-                                        )
+                           , ValFrame frame
+                           ]) = E.input (Ev.change (\e -> onEvent frame . ChangeEvent =<< (fromMaybe "" <$> inputTextFromEvent e)))
                                         ([] :: [VNode])
 
 renderVal onEvent (ValList elems) = E.div () $ map (renderVal onEvent) elems
 
-envFromEvents :: Map Text [Event] -> Map CodeDbId (Val IO IORef CodeDbId)
+envFromEvents :: Map (Eval.Frame CodeDbId) [Event] -> Map CodeDbId (Val CodeDbId)
 envFromEvents = Map.fromList . map envFromEvent . Map.assocs
-  where envFromEvent (token, events) = (CodeDbId token, ValList $ eventVal <$> events)
+  where envFromEvent (frame, events) = (CodeDbId $ "events-" `T.append` (T.pack . show $ frame), ValList $ eventVal <$> events)
         eventVal event = Eval.Primitive . Prim.Text . T.pack $ show event
-
 
 runWeb :: VMount -> IO ()
 runWeb mountPoint = do (bindingsWithIds, projection) <- Run.projectCode Code.web
-                       Adaptive.run $ do
-                         events <- Adaptive.newMod $ inM $ pure $ Map.empty
-                         let initialEnv = envFromEvents <$> Adaptive.readMod events
-                         (m_bindingsWithIds, ch_evaluated) <- Run.runProjectionWithEnv bindingsWithIds initialEnv
-                         let rerender token event = Adaptive.run $ do currentEvents <- Adaptive.inCh $ Adaptive.readMod events
-                                                                      Adaptive.change events $ addEvent event ("events-" `T.append` token) currentEvents
-                                                                      Adaptive.propagate
-                                                                      (inM . render rerender mountPoint) =<< ch_evaluated
-                                                                      
-                         (inM . render rerender mountPoint) =<< ch_evaluated
+                       events <- IORef.newIORef Map.empty 
+                       let rerender frame event = do currentEvents <- IORef.atomicModifyIORef events (addEvent event frame)
+                                                     render rerender mountPoint $ Run.runProjectionWithEnv bindingsWithIds (envFromEvents currentEvents)
+                       render rerender mountPoint $ Run.runProjectionWithEnv bindingsWithIds Map.empty
 
-render :: (Text -> Event -> IO ()) -> VMount -> Either [Run.Error] (Val IO IORef CodeDbId) -> IO ()
+render :: (Eval.Frame CodeDbId -> Event -> IO ()) -> VMount -> Either [Run.Error] (Val CodeDbId) -> IO ()
 render onEvent mountPoint val = do let vdom = either (textDiv . show) (renderVal onEvent) val
                                    p <- diff mountPoint vdom
                                    void $ patch mountPoint p

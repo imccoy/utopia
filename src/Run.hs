@@ -4,8 +4,6 @@ import Prelude hiding (id, putStrLn)
 
 import Control.Lens hiding (children, mapping)
 import Control.Monad
-import Control.Monad.Adaptive
-import Control.Monad.Adaptive.Ref
 import Data.Either.Combinators (eitherToError, mapLeft)
 import Data.IORef (IORef)
 import qualified Data.IORef as IORef
@@ -32,6 +30,8 @@ import qualified Id
 import qualified Lam
 
 
+import Debug.Trace
+
 data ProjectionCode = ProjectionCode CodeDbId CodeDbType [ProjectionCode]
 projectionCodeId :: ProjectionCode -> CodeDbId
 projectionCodeId (ProjectionCode id _ _) = id
@@ -47,66 +47,41 @@ instance Monoid Projection where
 data Error = ParseError (Lam.NameResolutionError CodeDbId) | RuntimeError (Eval.EvalError CodeDbId)
   deriving (Eq, Ord, Show)
 
-evalWithTrail :: Modifiable IO IORef [Lam.BindingWithId CodeDbId]
-              -> Changeable IO IORef [Eval.BindingWithMod IO IORef CodeDbId]
-              -> Changeable IO IORef (Map CodeDbId (Eval.Val IO IORef CodeDbId))
-              -> Modifiable IO IORef (Eval.Trail IO IORef CodeDbId)
-              -> Changeable IO IORef (Modifiable IO IORef (Either [Error] (Eval.Trailing IO IORef CodeDbId (Eval.Val IO IORef CodeDbId))))
-evalWithTrail m_bindingsWithIds ch_bindingsWithMod ch_initialEnv m_trail = do
-  m_either_resolved <- newMod $ Lam.resolveVars (Lam.GlobalNames Builtins.functionIds Builtins.allArgIds) <$> readMod m_bindingsWithIds
-  let ch_mainExp = (pure . fmap (\(_, _, _, exp) -> exp) . List.find (\(bindingId, boundId, name, exp) -> name == "main")) =<< mapM Eval.flattenBinding =<< ch_bindingsWithMod
-  let ch_toplevelEnv = do bindingsWithMod <- ch_bindingsWithMod
-                          assocs <- forM bindingsWithMod $ \binding -> do (\(bindingId, boundId, name, exp) -> (boundId, Eval.Thunk Set.empty Map.empty $ Id.WithId bindingId $ Identity $ Eval.ThunkExp exp)) <$> Eval.flattenBinding binding
-                          initialEnv <- ch_initialEnv
-                          pure $ Map.unions [Map.fromList assocs, Builtins.env, initialEnv]
-  newMod $ do mainExp <- ch_mainExp
-              either_resolved <- readMod m_either_resolved
-              case (mainExp, either_resolved) of
-                (Just exp, Right resolved)  -> do m_resolved <- newMod $ inM $ pure resolved
-                                                  ior_magicNumbers <- inM $ IORef.newIORef Map.empty
+evalWithTrail :: Lam.Resolved CodeDbId
+              -> Eval.Env CodeDbId
+              -> [Lam.BindingWithId CodeDbId]
+              -> Map CodeDbId (Eval.Val CodeDbId)
+              -> Lam.ExpWithId CodeDbId
+              -> Eval.Trail CodeDbId
+              -> Either [Error] (Eval.Trailing CodeDbId (Eval.Val CodeDbId))
+evalWithTrail resolved toplevelEnv bindingsWithIds initialEnv mainExp trail =
+  (_Left %~ map RuntimeError) $ Eval.eval resolved (Eval.GlobalEnv toplevelEnv) (Eval.Frame Nothing (CodeDbId "TOPFRAME") Map.empty) initialEnv trail mainExp
 
-                                                  let magicNumber i env parentMagicNumbers = IORef.atomicModifyIORef ior_magicNumbers go
-                                                        -- this is bad and I feel bad
-                                                        where go map = case Map.lookup (i, env, parentMagicNumbers) map of
-                                                                         Just x -> (map, x)
-                                                                         Nothing -> let x = fromIntegral $ Map.size map
-                                                                                     in (Map.insert (i, env, parentMagicNumbers) x map, x)
+eval :: [Lam.BindingWithId CodeDbId]
+     -> Map CodeDbId (Eval.Val CodeDbId)
+     -> Either [Error] (Eval.Val CodeDbId)
+eval bindingsWithIds initialEnv = do
+  resolved <- (_Left %~ pure . ParseError) $ Lam.resolveVars (Lam.GlobalNames Builtins.functionIds Builtins.allArgIds) bindingsWithIds
 
-                                                  evaluated <- Eval.eval m_resolved (Eval.GlobalEnv <$> ch_toplevelEnv) magicNumber [] (pure Map.empty) m_trail exp >>= readMod
-                                                  pure $ (_Left %~ map RuntimeError) $ evaluated
-                (Nothing, _) -> pure . Left $ [RuntimeError $ Eval.UndefinedVar (CodeDbId "toplevel") "main"]
-                (_, Left resolveErrors) -> pure . Left $ [ParseError resolveErrors]
+  let maybeMainExp = fmap (\(_, _, _, exp) -> exp) . List.find (\(bindingId, boundId, name, exp) -> name == "main") $ (Eval.flattenBinding <$> bindingsWithIds)
+  mainExp <- maybe (Left [RuntimeError $ Eval.UndefinedVar (CodeDbId "toplevel") "main"]) Right maybeMainExp
 
-eval :: Modifiable IO IORef [Lam.BindingWithId CodeDbId]
-     -> Changeable IO IORef [Eval.BindingWithMod IO IORef CodeDbId]
-     -> Changeable IO IORef (Map CodeDbId (Eval.Val IO IORef CodeDbId))
-     -> Adaptive IO IORef (Either [Error] (Eval.Val IO IORef CodeDbId))
-eval m_bindingsWithIds ch_bindingsWithMod ch_env = do
-  trail <- newMod (pure mempty)
-  evalResult <- inCh (evalWithTrail m_bindingsWithIds ch_bindingsWithMod ch_env trail)
-  iterateTrail trail evalResult
+  let toplevelEnv = let assocs = (\(bindingId, boundId, name, exp) -> (boundId, Eval.Thunk Set.empty Map.empty $ Id.WithId bindingId $ Identity $ Eval.ThunkExp exp)) . Eval.flattenBinding <$> bindingsWithIds
+                     in Map.unions [Map.fromList assocs, Builtins.env]
+
+  iterateTrail mempty (evalWithTrail resolved toplevelEnv bindingsWithIds initialEnv mainExp)
 
 
 
-iterateTrail :: Modifiable IO IORef (Eval.Trail IO IORef CodeDbId)
-             -> Modifiable IO IORef (Either [Error] (Eval.Trailing IO IORef CodeDbId (Eval.Val IO IORef CodeDbId)))
-             -> Adaptive IO IORef (Either [Error] (Eval.Val IO IORef CodeDbId))
-iterateTrail m_trail m_evalResult = do
-  inCh (readMod m_evalResult) >>= 
-    \case
-      Right (Eval.Trailing newTrail result) -> do trail1 <- inCh (readMod m_trail)
-                                                  let mergedTrails = Set.union trail1 newTrail
-                                                  if trail1 == mergedTrails
-
-                                                    then do -- inM $ putStrLn "ITERATE TRAIL DONE"
-                                                            -- inM $ Eval.printTrail newTrail
-                                                            pure $ Right result
-                                                    else do -- inM $ putStrLn $ T.pack $ "ITERATE TRAIL" ++ show (Set.size trail1) ++ " " ++ show (Set.size newTrail) ++ " "
-                                                            -- inM $ Eval.printTrail newTrail
-                                                            change m_trail mergedTrails
-                                                            propagate
-                                                            iterateTrail m_trail m_evalResult
-      Left e -> pure $ Left e
+iterateTrail :: Eval.Trail CodeDbId
+             -> (Eval.Trail CodeDbId -> Either [Error] (Eval.Trailing CodeDbId (Eval.Val CodeDbId)))
+             -> Either [Error] (Eval.Val CodeDbId)
+iterateTrail trail1 next =
+  do (Eval.Trailing newTrail result) <- next trail1
+     let mergedTrails = Set.union trail1 newTrail
+     if trail1 == mergedTrails
+       then pure result
+       else iterateTrail mergedTrails next
 
 projectCode code = do
   bindingsWithIds <- runCodeDbIdGen $ mapM (Lam.bindingWithId nextCodeDbId) code
@@ -114,26 +89,14 @@ projectCode code = do
   pure (bindingsWithIds, projection)
 
 
-runProjection :: [Lam.BindingWithId CodeDbId] -> Adaptive IO IORef (Modifiable IO IORef [Lam.BindingWithId CodeDbId], Adaptive IO IORef (Either [Error] (Eval.Val IO IORef CodeDbId)))
-runProjection bindingsWithIds = do 
-  m_bindingsWithIds <- newModBy (\bs1 bs2 -> (Set.fromList . map Id._id $ bs1) == (Set.fromList . map Id._id $ bs2)) $ inM $ pure bindingsWithIds
-  let ch_bindingsWithMod = mapM Eval.bindingWithMod =<< readMod m_bindingsWithIds
-
-  let ch_evaluated = eval m_bindingsWithIds ch_bindingsWithMod (pure Map.empty)
-
-  pure (m_bindingsWithIds, ch_evaluated)
+runProjection :: [Lam.BindingWithId CodeDbId] -> (Either [Error] (Eval.Val CodeDbId))
+runProjection bindingsWithIds = eval bindingsWithIds Map.empty
  
 runProjectionWithEnv :: [Lam.BindingWithId CodeDbId]
-                     -> Changeable IO IORef (Map CodeDbId (Eval.Val IO IORef CodeDbId))
-                     -> Adaptive IO IORef (Modifiable IO IORef [Lam.BindingWithId CodeDbId], Adaptive IO IORef (Either [Error] (Eval.Val IO IORef CodeDbId)))
-runProjectionWithEnv bindingsWithIds ch_initialEnv = do 
-  m_bindingsWithIds <- newModBy (\bs1 bs2 -> (Set.fromList . map Id._id $ bs1) == (Set.fromList . map Id._id $ bs2)) $ inM $ pure bindingsWithIds
-  let ch_bindingsWithMod = mapM Eval.bindingWithMod =<< readMod m_bindingsWithIds
-
-  let ch_evaluated = eval m_bindingsWithIds ch_bindingsWithMod ch_initialEnv
-
-  pure (m_bindingsWithIds, ch_evaluated)
- 
+                     -> Map CodeDbId (Eval.Val CodeDbId)
+                     -> Either [Error] (Eval.Val CodeDbId)
+runProjectionWithEnv bindingsWithIds initialEnv = 
+  eval bindingsWithIds initialEnv
 
 bindingsWithIdsProjection :: [Lam.BindingWithId CodeDbId] -> Either (Lam.NameResolutionError Text) Projection
 bindingsWithIdsProjection bindingsWithIds = do
