@@ -79,6 +79,7 @@ executable utopia
                        process,
                        safe,
                        text,
+                       time,
                        utopia
   default-language:    Haskell2010
   ghc-options:         -Wall

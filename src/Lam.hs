@@ -11,6 +11,7 @@ import Data.Functor.Identity
 import Data.Functor.Foldable.Extended
 import Data.Map (Map)
 import qualified Data.Map as Map
+import Data.Maybe (catMaybes)
 import Data.Set (Set)
 import qualified Data.Set as Set
 import qualified Data.Text as T
@@ -32,6 +33,7 @@ deriving instance (Show e, Show (w e), Show (w Name)) => Show (SuspendSpec w e)
 
 data ExpF w e = LamF [w Name] e
               | AppF e [(w Name, e)]
+              | RecordF [w Name]
               | VarF Name
               | SuspendF (SuspendSpec w e)
               | LamArgIdF Name
@@ -40,8 +42,18 @@ data ExpF w e = LamF [w Name] e
 
 deriving instance (Show e, Show (w e), Show (w Name)) => Show (ExpF w e)
 
-data Binding e = Binding Name e
-  deriving (Functor, Show)
+data Binding w = Binding Name (BindingContents w)
+
+deriving instance (Show (BindingContents w)) => Show (Binding w)
+
+data BindingContents w = BindingExp (Fix (ExpW w))
+                       | BindingTypeish (Typeish w)
+
+deriving instance (Show (w Name), Show (Fix (ExpW w))) => Show (BindingContents w)
+
+data Typeish w = Union [w Name]
+
+deriving instance (Show (w Name)) => Show (Typeish w)
 
 newtype ExpW w e = ExpW (w (ExpF w e))
   deriving (Functor, Prelude.Foldable, Traversable)
@@ -50,7 +62,10 @@ type Exp = Fix (ExpW Identity)
 
 deriving instance (Eq (w e), Eq (w (ExpF w e))) => Eq (ExpW w e)
 
-deriving instance (Show (w e), Show (w (ExpF w e))) => Show (ExpW w e)
+deriving instance (Show (w (ExpF w e))) => Show (ExpW w e)
+
+expBinding :: T.Text -> Exp -> Binding Identity
+expBinding name exp = Binding name $ BindingExp exp
 
 lam :: [T.Text] -> Exp -> Exp
 lam args body = Fix $ ExpW $ pure $ LamF (pure <$> args) body
@@ -73,10 +88,24 @@ suspend = Fix . ExpW . pure . SuspendF
 lamArgId :: T.Text -> Exp
 lamArgId = Fix . ExpW . pure . LamArgIdF
 
---expChangeW :: (w a -> w' a) -> ExpF w e -> ExpF w' e
+record :: [T.Text] -> Exp
+record = Fix . ExpW . pure . RecordF . fmap pure
+
+typeishBinding :: T.Text -> Typeish Identity -> Binding Identity
+typeishBinding name = Binding name . BindingTypeish 
+
+union :: [T.Text] -> Typeish Identity
+union = Union . fmap pure
+
+-- in theory, this is:
+--
+-- expChangeW :: (forall. w a -> w' a) -> ExpF w e -> ExpF w' e
+--
+-- But that needs Rank2Types or similar and it's not worth it.
 expChangeW :: (w Name -> w' Name) -> ExpF w e -> ExpF w' e
-expChangeW f (LamF names e) = LamF (map f names) e
 expChangeW f (AppF fun args) = AppF fun (map (_1 %~ f) args)
+expChangeW f (LamF names e) = LamF (map f names) e
+expChangeW f (RecordF names) = RecordF (map f names)
 expChangeW f (SuspendF suspendSpec) = SuspendF $ go suspendSpec
   where go (SuspendSpec name args parents) = SuspendSpec (f name) (map (_1 %~ f) args) (go <$> parents)
 expChangeW _ (LamArgIdF n) = LamArgIdF n
@@ -85,22 +114,26 @@ expChangeW _ (LitF l) = LitF l
 
 
 expChangeWM :: (Monad m) => (w Name -> m (w' Name)) -> ExpF w e -> m (ExpF w' e)
-expChangeWM f (LamF names e) = LamF <$> mapM f names <*> pure e
 expChangeWM f (AppF fun args) = AppF fun <$> mapM (_1 %%~ f) args
+expChangeWM f (LamF names e) = LamF <$> mapM f names <*> pure e
+expChangeWM f (RecordF names) = RecordF <$> mapM f names
 expChangeWM f (SuspendF suspendSpec) = SuspendF <$> go suspendSpec
   where go (SuspendSpec name args parents) = SuspendSpec <$> f name <*> mapM (_1 %%~ f) args <*> mapM go parents
 expChangeWM _ (VarF n) = pure $ VarF n
 expChangeWM _ (LamArgIdF n) = pure $ LamArgIdF n
 expChangeWM _ (LitF l) = pure $ LitF l
 
-type ExpWithId i = Fix (ExpW (Id.WithId i Identity))
-type BindingWithId i = Id.WithId i Identity (Binding (ExpWithId i))
+typeishChangeW f (Union cons) = Union $ f <$> cons
 
-bindingWithId :: (Monad m) => m i -> Binding Exp -> m (BindingWithId i)
-bindingWithId gen (Binding name exp) = do
+type ExpWithId i = Fix (ExpW (Id.WithId i Identity))
+type BindingWithId i = Id.WithId i Identity (Binding (Id.WithId i Identity))
+
+bindingWithId :: (Monad m) => m i -> Binding Identity -> m (BindingWithId i)
+bindingWithId gen (Binding name contents) = do
   bindingId <- gen
-  expsWithIds <- expsWithIdM gen exp
-  pure $ Id.WithId bindingId $ pure (Binding name expsWithIds)
+  Id.WithId bindingId . Identity . Binding name <$> case contents of
+     BindingExp exp -> BindingExp <$> expsWithIdM gen exp
+     BindingTypeish typeish -> BindingTypeish <$> typeishWithIdM gen typeish
 
 
 addId :: (Monad m) => m i -> Identity v -> m (Id.WithId i Identity v)
@@ -118,9 +151,15 @@ expsWithIdM' gen (ExpW (Identity e)) = do
 expsWithIdM :: (Monad m) => m i -> Exp -> m (ExpWithId i)
 expsWithIdM gen exp = cataM (expsWithIdM' gen) exp
 
+typeishWithIdM :: Monad m => m i -> Typeish Identity -> m (Typeish (Id.WithId i Identity))
+typeishWithIdM gen (Union constructors) = Union <$> traverse (addId gen) constructors
+
 mapBindingId :: (i1 -> i2) -> BindingWithId i1 -> BindingWithId i2
-mapBindingId f (Id.WithId i (Identity (Binding n v))) = Id.WithId (f i) $ Identity $ Binding n $ cata go v
+mapBindingId f (Id.WithId i (Identity (Binding n v))) = Id.WithId (f i) $ Identity $ Binding n $ mapBindingContentsId f v
+
+mapBindingContentsId f (BindingExp v) = BindingExp $ cata go v
   where go (ExpW withId) = Fix $ ExpW $ Id.mapId f $ (expChangeW (Id.mapId f) <$> withId)
+mapBindingContentsId f (BindingTypeish t) = BindingTypeish $ typeishChangeW (Id.mapId f) t
 
 type Resolved i = Map i i
 
@@ -134,10 +173,31 @@ data NameResolutionError i = DuplicatedArgNames (ArgNameDuplicates i) | Undefine
 data GlobalNames i = GlobalNames { globalNamesTopLevelBindings :: Map Name i, globalNamesArgs :: Map Name i }
 
 globalNames :: (Ord i) => GlobalNames i -> [BindingWithId i] -> Either (ArgNameDuplicates i) (GlobalNames i)
-globalNames (GlobalNames builtinsIds builtinsArgIds) bindings = GlobalNames (builtinsIds `Map.union` topLevelBindingNamesFromBindings bindings) <$> (argNamesFromBindings builtinsArgIds bindings)
+globalNames (GlobalNames builtinsIds builtinsArgIds) bindings = GlobalNames (builtinsIds `Map.union` topLevelBindingNamesFromBindingWithExps bindings) <$> (argNamesFromBindings builtinsArgIds bindings)
+
+contentsFromBinding :: BindingWithId i -> BindingContents (Id.WithId i Identity)
+contentsFromBinding (Id.WithId _ (Identity (Binding _ contents))) = contents
+
+bindingName :: BindingWithId i -> Name
+bindingName (Id.WithId _ (Identity (Binding n _))) = n
+
+bindingExp :: BindingWithId i -> Maybe (ExpWithId i)
+bindingExp = bindingContentsExp . contentsFromBinding
+
+bindingContentsExp (BindingExp exp) = Just exp
+bindingContentsExp _ = Nothing
+
+bindingTypeish :: BindingWithId i -> Maybe (Typeish (Id.WithId i Identity))
+bindingTypeish = bindingContentsTypeish . contentsFromBinding
+
+bindingContentsTypeish (BindingTypeish typeish) = Just typeish
+bindingContentsTypeish _ = Nothing
 
 bindingExps :: [BindingWithId i] -> [ExpWithId i]
-bindingExps = map (\(Id.WithId _ (Identity (Binding _ e))) -> e)
+bindingExps = catMaybes . map bindingExp
+
+bindingTypeishs :: [BindingWithId i] -> [Typeish (Id.WithId i Identity)]
+bindingTypeishs = catMaybes . map bindingTypeish
 
 smooshEithers :: Monoid l => (r -> r -> Either l r) -> (r -> l -> l) -> Either l r -> Either l r -> Either l r
 smooshEithers _     _      (Left err1) (Left err2) = Left $ err1 `mappend` err2
@@ -145,19 +205,24 @@ smooshEithers _     fOkErr (Right ok)  (Left err)  = Left $ fOkErr ok err
 smooshEithers _     fOkErr (Left err)  (Right ok)  = Left $ fOkErr ok err
 smooshEithers fOkOk _      (Right ok1) (Right ok2) = fOkOk ok1 ok2
 
-topLevelBindingNamesFromBindings :: (Ord i) => [BindingWithId i] -> Map Name i
-topLevelBindingNamesFromBindings bindings = Map.fromList [(name, id) | (Id.WithId _ (Identity (Binding name (Fix (ExpW (Id.WithId id _)))))) <- bindings]
+
+topLevelBindingNamesFromBindingWithExps :: (Ord i) => [BindingWithId i] -> Map Name i
+topLevelBindingNamesFromBindingWithExps = Map.fromList . catMaybes . map (\(Id.WithId _ (Identity (Binding name contents))) -> ((name,) . expTopId) <$> bindingContentsExp contents)
+
+expTopId :: Fix (ExpW (Id.WithId i Identity)) -> i
+expTopId (Fix (ExpW (Id.WithId i _))) = i
 
 argNamesFromBindings :: (Ord i) => Map Name i -> [BindingWithId i] -> Either (ArgNameDuplicates i) (Map Name i)
-argNamesFromBindings builtinsArgsIds = argNamesFromExps builtinsArgsIds . bindingExps
+argNamesFromBindings builtinsArgsIds bindings = argNamesFromExps builtinsArgsIds (catMaybes $ typeishArgIds <$> bindings) (bindingExps bindings)
 
-argNamesFromExps :: (Ord i) => Map Name i -> [ExpWithId i] -> Either (ArgNameDuplicates i) (Map Name i)
-argNamesFromExps builtinsArgsIds exps = combineAll $ (Right builtinsArgsIds):(map argNamesFromExp exps)
+argNamesFromExps :: (Ord i) => Map Name i -> [Map Name i] -> [ExpWithId i] -> Either (ArgNameDuplicates i) (Map Name i)
+argNamesFromExps builtinsArgsIds typeishsArgsIds exps = combineAll $ (Right <$> typeishsArgsIds) ++ (Right builtinsArgsIds):(map argNamesFromExp exps)
   where
     argNamesFromExp :: (Ord i) => ExpWithId i -> Either (ArgNameDuplicates i) (Map Name i)
     argNamesFromExp = cata $ \(ExpW (Id.WithId i (Identity v))) ->
        case v of
          LamF args e -> combineAll $ e:[Right $ Map.singleton name id | (Id.WithId id (Identity name)) <- args]
+         RecordF args -> combineAll $ [Right $ Map.singleton name id | (Id.WithId id (Identity name)) <- args]
          _ -> combineAll v
 
     combineAll :: (Ord i, Data.Foldable.Foldable f) => f (Either (ArgNameDuplicates i) (Map Name i)) -> Either (ArgNameDuplicates i) (Map Name i)
@@ -184,6 +249,13 @@ argNamesFromExps builtinsArgsIds exps = combineAll $ (Right builtinsArgsIds):(ma
                                                                       (Map.mapMaybeWithKey singletonIfIntersecting r)
 
 
+typeishArgIds :: BindingWithId i -> Maybe (Map Name i)
+typeishArgIds binding = go <$> bindingTypeish binding
+  where go (Union constructors) = Map.fromList [ (name, id) 
+                                               | (Id.WithId id (Identity name)) <- constructors
+                                               ]
+                          
+
 resolveVars :: (Ord i) => GlobalNames i -> [BindingWithId i] -> Either (NameResolutionError i) (Resolved i)
 resolveVars builtins bindings = do
   globalNameBindings <- _Left %~ DuplicatedArgNames $ globalNames builtins bindings
@@ -203,15 +275,15 @@ resolveExpVars :: forall i. (Ord i) => GlobalNames i -> ExpWithId i -> Either (U
 resolveExpVars globalNames expr = go Map.empty expr
   where
     go env (Fix (ExpW (Id.WithId i (Identity e)))) = go' env i e
+    go' env i (AppF e args) = concatExpVars $ (go env e):[lookupArg env arg | arg <- args]
     go' env i (LamF names e) = go (addNamesToEnv names env) e
       where 
         addNamesToEnv :: [Id.WithId i Identity T.Text] -> Map Name i -> Map Name i
         addNamesToEnv names = Map.union (Map.fromList [(name, id) | (Id.WithId id (Identity name)) <- names])
-    go' env i (AppF e args) = concatExpVars $ (go env e):[lookupArg env arg | arg <- args]
+    go' env i (RecordF _) = Right $ Map.empty -- a RecordF is like a degenerate case of a lam that just has no body and returns its arguments
 
     go' env i (LamArgIdF name) = lookupArgName i name
     go' env i (VarF name) = resolveVarName env i name
-    --go' env i (SuspendF suspendSpec) = concatExpVars $ (resolveVarName env i name ):[lookupArg env arg | arg <- args]
     go' env i (SuspendF suspendSpec) = resolveSuspendSpec env suspendSpec
     go' env i (LitF _) = Right $ Map.empty
 
@@ -233,9 +305,11 @@ resolveExpVars globalNames expr = go Map.empty expr
                                  Just targetId -> Right $ Map.singleton id targetId
                                  Nothing -> Left $ MonoidMap $ Map.singleton argName (Set.singleton id)
 
-
 bindingDiffTree :: Resolved T.Text -> BindingWithId T.Text -> DiffTree
-bindingDiffTree env (Id.WithId id (Identity (Binding name exp))) = DiffTree id "Binding" (Just name) [expDiffTree env exp]
+bindingDiffTree env (Id.WithId id (Identity (Binding name contents))) = bindingContentsDiffTree env id name contents
+
+bindingContentsDiffTree env id name (BindingExp exp) = DiffTree id "BindingExp" (Just name) [expDiffTree env exp]
+bindingContentsDiffTree env id name (BindingTypeish typeish) = typeishDiffTree env id typeish
 
 bindingDiffTrees :: GlobalNames T.Text -> [BindingWithId T.Text] -> Either (NameResolutionError T.Text) [DiffTree]
 bindingDiffTrees builtins bindings = do
@@ -244,21 +318,6 @@ bindingDiffTrees builtins bindings = do
 
 expDiffTree :: Resolved T.Text -> ExpWithId T.Text -> DiffTree
 expDiffTree env = cata $ \(ExpW (Id.WithId i (Identity v))) -> case v of
-  LamF args body      -> DiffTree i "Lam" Nothing $
-                                          [DiffTree argId
-                                                    "LamArg"
-                                                    (Just arg) 
-                                                    []
-                                          | (Id.WithId argId (Identity arg)) <- args
-                                          ] ++ [body]
-  VarF name           -> DiffTree i "Var" (Just name) 
-                                          --[DiffTree (i `T.append` ".Ref")
-                                          --          "METADATA-REF"
-                                          --          (Data.Foldable.fold $ Map.lookup i env)
-                                          --          []
-                                          --]
-                                          []
-  SuspendF suspendSpec -> suspendSpecDiffTree suspendSpec
   AppF f args        -> DiffTree i "App" Nothing $
                                          f:[DiffTree argId
                                                      "AppArg"
@@ -266,9 +325,34 @@ expDiffTree env = cata $ \(ExpW (Id.WithId i (Identity v))) -> case v of
                                                      [e]
                                            | (Id.WithId argId (Identity arg), e) <- args
                                            ]
-  LamArgIdF name     -> DiffTree i "LamArgId" (Just (T.pack $ show name)) []
-  LitF (Number n)    -> DiffTree i "LitNumber" (Just (T.pack $ show n)) []
-  LitF (Text t)      -> DiffTree i "LitText" (Just t) []
+  LamF args body      -> DiffTree i "Lam" Nothing $
+                                          [DiffTree argId
+                                                    "LamArg"
+                                                    (Just arg) 
+                                                    []
+                                          | (Id.WithId argId (Identity arg)) <- args
+                                          ] ++ [body]
+  RecordF fields         -> DiffTree i "Record" Nothing
+                                                [DiffTree fieldId
+                                                          "RecordField"
+                                                          (Just field) 
+                                                          []
+                                                | (Id.WithId fieldId (Identity field)) <- fields
+                                                ]
+
+
+  VarF name            -> DiffTree i "Var" (Just name) 
+                                          --[DiffTree (i `T.append` ".Ref")
+                                          --          "METADATA-REF"
+                                          --          (Data.Foldable.fold $ Map.lookup i env)
+                                          --          []
+                                          --]
+                                          []
+  SuspendF suspendSpec -> suspendSpecDiffTree suspendSpec
+  
+  LamArgIdF name       -> DiffTree i "LamArgId" (Just (T.pack $ show name)) []
+  LitF (Number n)      -> DiffTree i "LitNumber" (Just (T.pack $ show n)) []
+  LitF (Text t)        -> DiffTree i "LitText" (Just t) []
 
 suspendSpecDiffTree (SuspendSpec (Id.WithId i (Identity name)) args parents) = DiffTree i "Suspend" (Just name) $
                                                                                                     [DiffTree argId
@@ -282,3 +366,10 @@ suspendSpecDiffTree (SuspendSpec (Id.WithId i (Identity name)) args parents) = D
                                                                                                                Nothing
                                                                                                                [suspendSpecDiffTree parent]
                                                                                                     | (parentNumber, parent) <- zip [0..] parents]
+
+typeishDiffTree env id (Union constructors) = DiffTree id
+                                                       "Union"
+                                                       Nothing
+                                                       [ DiffTree constructorId "UnionCon" (Just constructor) []
+                                                       | Id.WithId constructorId (Identity constructor) <- constructors
+                                               ]

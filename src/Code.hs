@@ -1,50 +1,51 @@
 module Code where
 
 import Lam
+import Data.Functor.Identity
 import Data.Text (Text)
 
-v1 :: [Binding Exp]
-v1 = [ Binding "add2" $ lam ["n"] $
+v1 :: [Binding Identity]
+v1 = [ expBinding "add2" $ lam ["n"] $
            app (var "+") [("+_1", lit (Number 2)), ("+_2", var "n")]
-     , Binding "main" $ lam [] $
+     , expBinding "main" $ lam [] $
            app (var "add2") [("n", lit (Number 5))]
      ]
 
-v2 :: [Binding Exp]
-v2 = [ Binding "add2twice" $ lam ["n"] $
+v2 :: [Binding Identity]
+v2 = [ expBinding "add2twice" $ lam ["n"] $
            app (var "+")
                [ ("+_1", lit (Number 2))
                , ("+_2", app (var "+") [("+_1", lit (Number 2)), 
                                         ("+_2", var "n")])
                ]
-     , Binding "main" $ lam [] $
+     , expBinding "main" $ lam [] $
            app (var "add2twice") [("n", lit (Number 5))]
      ]
 
-tracey :: [Binding Exp]
-tracey = [ Binding "gen1" $ lam ["gen1_n"] $ 
+tracey :: [Binding Identity]
+tracey = [ expBinding "gen1" $ lam ["gen1_n"] $ 
                var "gen1_n"
-         , Binding "gen2" $ lam ["gen2_n"] $
+         , expBinding "gen2" $ lam ["gen2_n"] $
                var "gen2_n"
-         , Binding "glue1" $ lam [] $
+         , expBinding "glue1" $ lam [] $
                listOf [app (var "gen1") [("gen1_n", lit (Number 1))]
                       ,app (var "gen1") [("gen1_n", lit (Number 2))]
                       ,app (var "gen1") [("gen1_n", lit (Number 3))]
                       ]
-         , Binding "glue2a" $ lam [] $
+         , expBinding "glue2a" $ lam [] $
                app (var "suspensionFrameList")
                    [("suspensionFrameList_suspension", suspend $ suspendSpec "gen1" [] [])]
-         , Binding "glue2" $ lam [] $
+         , expBinding "glue2" $ lam [] $
                app (var "listMap")
                    [("listMap_list", (app (var "glue2a") []))
                    ,("listMap_f", lam ["builtin-listMap-listMap_f-elem"] $
                                       app (var "gen2")
                                           [("gen2_n", app (var "frameArg") [("frameArg_frame", var "builtin-listMap-listMap_f-elem"), ("frameArg_arg", lamArgId "gen1_n")])])
                    ]
-         , Binding "glue3" $ lam [] $
+         , expBinding "glue3" $ lam [] $
                app (var "suspensionFrameList")
                    [("suspensionFrameList_suspension", suspend $ suspendSpec "gen2" [] [])]
-         , Binding "main" $ lam [] $
+         , expBinding "main" $ lam [] $
                listOf [ var "glue1"
 --                      , var "glue2a"
                       , var "glue2"
@@ -52,8 +53,8 @@ tracey = [ Binding "gen1" $ lam ["gen1_n"] $
                       ]
          ]
 
-nestedMaps :: [Binding Exp]
-nestedMaps = [ Binding "main" $ lam [] $
+nestedMaps :: [Binding Identity]
+nestedMaps = [ expBinding "main" $ lam [] $
                  listOf [
                           app (var "+") [("+_1", lit $ Number 1), ("+_2", (app (var "+") [("+_1", lit $ Number 2), ("+_2", lit $ Number 3)]))]
                         , app (var "+") [("+_1", (app (var "+") [("+_1", lit $ Number 2), ("+_2", lit $ Number 3)])), ("+_2", lit $ Number 1)]
@@ -145,21 +146,21 @@ frameResult :: Exp -> Exp
 frameResult frame = app (var "frameResult")
                         [("frameResult_frame", frame)]
 
-buttonWeb :: [Binding Exp]
-buttonWeb = [ Binding "incrementButton" $ lam [] $
+buttonWeb :: [Binding Identity]
+buttonWeb = [ expBinding "incrementButton" $ lam [] $
                 app (var "htmlButton")
                     [ ("htmlButton_text", lit (Text "+"))
                     ]
-            , Binding "decrementButton" $ lam [] $
+            , expBinding "decrementButton" $ lam [] $
                 app (var "htmlButton")
                     [ ("htmlButton_text", lit (Text "-"))
                     ]
 
-            , Binding "clickCount" $ lam ["clickCount_button"] $
+            , expBinding "clickCount" $ lam ["clickCount_button"] $
                 listSum $ listMap (lam ["builtin-listMap-listMap_f-elem"] $
                                        listLength $ htmlElementEvents $ frameResult (var "builtin-listMap-listMap_f-elem"))
                                   (suspensionFrameList (var "clickCount_button"))
-            , Binding "main" $ lam [] $
+            , expBinding "main" $ lam [] $
                 listOf [ app (var "htmlText")
                              [ ("htmlText_text", lit (Text "Oh, hello there"))
                              ]
@@ -192,20 +193,20 @@ namedLetBindings name namesExps inner = letBindings [(name, lam (map fst namesEx
 
 web = todoWeb
 
-
-todoWeb :: [Binding Exp]
-todoWeb = [ Binding "todoTextBox" $ lam [] $
+todoWeb :: [Binding Identity]
+todoWeb = [ expBinding "todoRecord" $ record ["todoRecord_id", "todoRecord_text"]
+          , expBinding "todoTextBox" $ lam [] $
               app (var "htmlTextInput") []
-          , Binding "todoAddButton" $ lam [] $
+          , expBinding "todoAddButton" $ lam [] $
               app (var "htmlButton") [("htmlButton_text", lit (Text "Add"))]
-          , Binding "todoForm" $ lam ["todoForm_n"] $
+          , expBinding "todoForm" $ lam ["todoForm_n"] $
               listOf [ app (var "todoTextBox") []
                      , app (var "todoAddButton") []
                      ]
-          , Binding "savedTodoWidgets" $ lam [] $
+          , expBinding "savedTodoWidgets" $ lam [] $
               listMap (lam ["savedTodoForms_mapFrames"] $
                           listMap (lam ["savedTodoForm_frame"] $ 
-                                      listMap ((lam ["event"] (htmlText (var "event"))) :: Exp)
+                                      listMap ((lam ["event"] (htmlText (app (frameArgLit (var "event") "event_details") [("htmlEventDetails_textChange", var "identityFunction")]))))
                                               (htmlElementEvents (frameResult (var "savedTodoForm_frame")))
                                   )
                                   (suspensionFrameList (suspend $ suspendSpec "todoTextBox" 
@@ -220,22 +221,23 @@ todoWeb = [ Binding "todoTextBox" $ lam [] $
                                   )
                                   (suspensionFrameList (suspend $ suspendSpec "todoForm" [] []))
                       )
-          , Binding "unsavedTodoForm" $ lam [] $
+          , expBinding "unsavedTodoForm" $ lam [] $
               app (var "todoForm") [("todoForm_n", listLength (app (var "savedTodoWidgets") []))]
               --app (var "todoForm") [("todoForm_n", lit $ Number 0)]
-          , Binding "main" $ lam [] $
+          , expBinding "main" $ lam [] $
               listOf [ app (var "unsavedTodoForm") []
                      , app (var "savedTodoWidgets") []
                      , htmlText (numberToText (listLength (app (var "savedTodoWidgets") [])))
                      ]
-          , Binding "clickCount" $ lam ["clickCount_button"] $
+          , expBinding "clickCount" $ lam ["clickCount_button"] $
              listSum $ listMap (lam ["builtin-listMap-listMap_f-elem"] $
                                     listLength $ htmlElementEvents $ frameResult (var "builtin-listMap-listMap_f-elem"))
                                (suspensionFrameList (var "clickCount_button"))
+          , expBinding "identityFunction" $ lam ["identityFunction_arg"] (var "identityFunction_arg")
           ] 
 
 --
---todo :: [Binding Exp]
+--todo :: [Binding Identity]
 --todo = [ Binding "addTodo" $ lam [] $
 --             app (var "button") [("button-text", lit (Text "Add Todo"))]
 --       , Binding "todoTextEntry" $ lam [] $

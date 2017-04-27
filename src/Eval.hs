@@ -13,7 +13,6 @@ import qualified Data.Map as Map
 import Data.Set (Set)
 import qualified Data.Set as Set
 import qualified Data.Text as T
-import System.IO.Unsafe (unsafePerformIO) -- this had really better be temporary
 
 import Data.Functor.Foldable.Extended
 import qualified Id
@@ -25,13 +24,11 @@ import qualified Prim
 
 import Debug.Trace
 
-flattenBinding :: BindingWithId i -> (i, i, Lam.Name, ExpWithId i)
-flattenBinding (Id.WithId bindingId (Identity (Lam.Binding n exp@(Fix (Lam.ExpW (Id.WithId boundId _)))))) = (bindingId, boundId, n, exp)
+flattenBinding :: BindingWithId i -> Maybe (i, i, Lam.Name, ExpWithId i)
+flattenBinding binding = flip fmap (Lam.bindingExp binding) $ \exp -> 
+    (binding ^. Id.id, Lam.expTopId exp, Lam.bindingName binding, exp)
 
-bindingExp :: BindingWithId i -> ExpWithId i
-bindingExp (Id.WithId _ (Identity (Lam.Binding _ exp))) = exp
-
-data EvalError i = UndefinedVar i T.Text | TypeError i T.Text
+data EvalError i = UndefinedVar i T.Text | TypeError i (Val i) T.Text
   deriving (Eq, Ord, Show)
 
 type ThunkWithId i = Id.WithId i Identity (Thunk i)
@@ -58,7 +55,7 @@ data Thunk i = ThunkFn (Env i -> GlobalEnv i -> Either [EvalError i] (Val i))
              | ThunkEvalFn (Env i -> GlobalEnv i -> (Val i -> Either [EvalError i] (Trailing i (Val i))) -> Either [EvalError i] (Trailing i (Val i)))
              | ThunkTrailFn (Trail i -> Env i -> GlobalEnv i -> Either [EvalError i] (Val i))
              | ThunkExp (ExpWithId i)
-
+             | ThunkRecord
 
 instance Show i => Show (Thunk i) where
   show (ThunkFn _) = "thunkfn"
@@ -73,7 +70,14 @@ pprintVal = unlines . go 0
   where
     put indent s = [replicate indent ' ' ++ s]
     go indent (Primitive p) = put indent ("Primitive " ++ show p)
-    go indent (Thunk needed _ t) = concat $ [ put indent $ "Thunk " ++ (show $ t ^. Id.id) ++ " " ++ (show $ t ^. Id.value) ] ++ neededArgsRows
+    go indent (Thunk needed env t) = concat $ [ put indent $ "Thunk " ++ (show $ t ^. Id.id) ++ " " ++ (show $ t ^. Id.value)
+                                              , concat neededArgsRows 
+                                              , put (indent + 2) "has"
+                                              , concat [ put (indent + 4) (show k) ++
+                                                         concat [ go (indent + 6) v ] 
+                                                       | (k, v) <- Map.assocs env
+                                                       ]
+                                              ]
       where neededArgsRows
               | Set.null needed  = [ put (indent + 2) "satisfied" ]
               | otherwise        = [ put (indent + 2) "needs"
@@ -144,6 +148,9 @@ eval :: (Ord i, Show i)
   -> Either [EvalError i] (Trailing i (Val i))
 eval resolved globalEnv parentFrames env trail (Fix (Lam.ExpW (Id.WithId id (Identity v)))) =
   withEitherTrail (evalVal resolved globalEnv parentFrames env trail) $ case v of
+    Lam.RecordF args  -> let argIds = map (^. Id.id) args
+                          in Right $ noTrail $ Thunk (Set.fromList argIds) env (Id.withId id ThunkRecord)
+
     Lam.LamF args exp -> let argIds = map (^. Id.id) args
                           in Right $ noTrail $ Thunk (Set.fromList argIds) env (Id.withId id (ThunkExp exp))
 
@@ -235,6 +242,7 @@ evalThunk resolved globalEnv parentFrame trail thunkEnv argsEnv thunk
               ThunkResolvedFn fn -> fn newFrame thunkEnv globalEnv resolved
               ThunkEvalFn fn     -> fn thunkEnv globalEnv (evalVal resolved globalEnv newFrame thunkEnv trail)
               ThunkExp exp       -> eval resolved globalEnv newFrame thunkEnv trail exp
+              ThunkRecord        -> pure . pure . ValFrame $ newFrame
             pure $ expandTrail (newFrame, dropTrail result) result
 
 lookupVar :: (Ord i, Show i) => i -> Lam.Resolved i -> Map i (Val i) -> GlobalEnv i -> Maybe (Val i)

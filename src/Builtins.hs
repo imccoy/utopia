@@ -1,4 +1,4 @@
-module Builtins (functionIds, allArgIds, EvalError(..), Builtin, env) where
+module Builtins (functionIds, allArgIds, EvalError(..), Builtin, env, unionVal) where
 
 import Debug.Trace
 
@@ -51,6 +51,7 @@ data BuiltinBody = FnBody (CodeDbId -> BuiltinEnv -> BuiltinGlobalEnv -> Either 
                               -> (BuiltinVal -> 
                                   Either [EvalError CodeDbId] (BuiltinTrailing BuiltinVal))
                               -> Either [EvalError CodeDbId] (BuiltinTrailing BuiltinVal))
+                 | Record
 
 makeLenses ''Builtin
 
@@ -64,13 +65,13 @@ getList i argId env = get i argId env >>= asList i
 
 asList i v = case v of
   (ValList list) -> pure list 
-  _ -> Left [TypeError i $ T.pack $ show v ++ " is not a list"]
+  _ -> Left [TypeError i v $ " is not a list"]
 
 getSuspension :: CodeDbId -> T.Text -> BuiltinEnv -> Either [EvalError CodeDbId] BuiltinSuspension
 getSuspension i argId env = get i argId env >>= \v ->
   case v of
     (ValSuspension suspension) -> Right suspension
-    _ -> Left [TypeError i $ T.pack $ show v ++ " is not a suspension"]
+    _ -> Left [TypeError i v " is not a suspension"]
 
 getPrim :: CodeDbId -> T.Text -> BuiltinEnv -> Either [EvalError CodeDbId] Prim.Prim
 getPrim i argId env = get i argId env >>= asPrim i
@@ -79,15 +80,15 @@ getFrame :: CodeDbId -> T.Text -> BuiltinEnv -> Either [EvalError CodeDbId] (Fra
 getFrame i argId env = get i argId env >>= \v ->
   case v of
     ValFrame frame -> Right frame
-    _ -> Left [TypeError i $ (T.pack $ show v) `T.append` " is not a frame"]
+    _ -> Left [TypeError i  v "is not a frame"]
 
 asPrim i v = case v of
   Primitive p -> Right p
-  _ -> Left [TypeError i $ (T.pack $ show v) `T.append` " is not a prim"]
+  _ -> Left [TypeError i v "is not a prim"]
 
 asNumber i v = case v of
                  (Prim.Number num) -> pure num
-                 p -> Left [TypeError i $ T.pack $ show p ++ " is not a number"]
+                 p -> Left [TypeError i (Primitive p) " is not a number"]
 
 getNumber :: CodeDbId -> T.Text -> BuiltinEnv -> Either [EvalError CodeDbId] Integer
 getNumber i argId env = getPrim i argId env >>= asNumber i
@@ -96,7 +97,7 @@ getText :: CodeDbId -> T.Text -> BuiltinEnv -> Either [EvalError CodeDbId] T.Tex
 getText i argId env = getPrim i argId env >>= \v ->
   case v of
     (Prim.Text text) -> pure text
-    p -> Left [TypeError i $ T.pack $ show p ++ " is not text"]
+    p -> Left [TypeError i (Primitive p) " is not text"]
 
 
 
@@ -106,7 +107,7 @@ getThunkable :: CodeDbId -> T.Text -> BuiltinEnv -> Either [EvalError CodeDbId] 
 getThunkable i argId env = get i argId env >>= \v ->
   case v of
     Thunk needed env body -> Right (needed, env, body)
-    _ -> Left [TypeError i $ T.pack $ show v ++ " is not a thunk"]
+    _ -> Left [TypeError i v " is not a thunk"]
 
 thunkableApp :: Thunkable -> CodeDbId -> BuiltinVal -> Thunkable
 thunkableApp (needed, env, body) argName argVal = ( Set.delete argName needed
@@ -164,16 +165,16 @@ listAdd = Builtin "listAdd" ["listAdd_elem", "listAdd_list"] . FnBody $ \i e g -
 
 listMap :: Builtin
 listMap = Builtin "listMap" ["listMap_f", "listMap_list"] . EvalFnBody $ \i e g eval -> do
-  thunks <- do (thunkNeeded, thunkEnv, thunkBody) <- getThunkable i "builtin-listMap-listMap_f" e
+  thunks <- do thunkable <- getThunkable i "builtin-listMap-listMap_f" e
                list <- getList i "builtin-listMap-listMap_list" e
-               case Set.toList thunkNeeded of
-                 [argId] -> trace ("Mapping into " ++ show argId ++ " of " ++ (show $ thunkBody ^. Id.id)) $
-                            pure [ Thunk Set.empty (Map.insert argId elem thunkEnv) thunkBody
-                                 | elem <- list]
-                 [] -> Left [TypeError i "No arg for listMap_f"]
-                 _ -> Left [TypeError i "Too many args for listMap_f"]
+               eitherList $ callOneArgThunkable i "listMap_f" thunkable <$> list
   vals <- mapM eval thunks
   pure $ ValList <$> sequenceA vals
+
+callOneArgThunkable i label (thunkNeeded, thunkEnv, thunkBody) argValue = case Set.toList thunkNeeded of
+  [argId] -> Right $ Thunk Set.empty (Map.insert argId argValue thunkEnv) thunkBody
+  [] -> Left [TypeError i (Thunk thunkNeeded thunkEnv thunkBody) $ "No arg for " `T.append` label]
+  _ -> Left [TypeError i (Thunk thunkNeeded thunkEnv thunkBody) $ "Too many args for " `T.append` label]
 
 listFilter :: Builtin
 listFilter = Builtin "listFilter" ["listFilter_f", "listFilter_list"] . EvalFnBody $ \i e g eval -> do
@@ -182,8 +183,8 @@ listFilter = Builtin "listFilter" ["listFilter_f", "listFilter_list"] . EvalFnBo
                case Set.toList thunkNeeded of
                  [argId] -> pure [ Thunk Set.empty (Map.insert argId elem thunkEnv) thunkBody
                                  | elem <- list]
-                 [] -> Left [TypeError i "No arg for listFilter_f"]
-                 _ -> Left [TypeError i "Too many args for listFilter_f"]
+                 [] -> Left [TypeError i (Thunk thunkNeeded thunkEnv thunkBody) "No arg for listFilter_f"]
+                 _ -> Left [TypeError i (Thunk thunkNeeded thunkEnv thunkBody) "Too many args for listFilter_f"]
   ts <- sequenceA <$> mapM eval thunks
   let matchListVs vs = zipWith (\l v -> if v == Primitive (Prim.Number 0) then Nothing else Just l) list vs
   let trail_filtered = (\vs -> catMaybes . matchListVs $ vs) <$> ts
@@ -218,13 +219,13 @@ htmlElementEvents = Builtin "htmlElementEvents" ["htmlElementEvents_element"] . 
   let eventsByToken frame = case Eval.lookupVarByResolvedId e g (CodeDbId $ "events-" `T.append` (T.pack . show $ frame)) of
                               Just (ValList v) -> Right . noTrail $ ValList v
                               Nothing -> Right . noTrail . ValList $ []
-                              Just v -> Left [TypeError i $ T.pack $ "non-events " ++ show v ++ " at " ++ show frame]
+                              Just v -> Left [TypeError i v $ "non-events at " `T.append` (T.pack . show $ frame)]
   case getList i "builtin-htmlElementEvents-htmlElementEvents_element" e of
     Left e -> Left e
     Right element -> case element of
                        [Primitive (Prim.Text "button"), _, ValFrame frame] -> eventsByToken frame
                        [Primitive (Prim.Text "textInput"), ValFrame frame] -> eventsByToken frame
-                       _ -> Left [TypeError i $ T.pack $ show element ++ " is not an element with events"]
+                       _ -> Left [TypeError i (ValList element) $ " is not an element with events"]
 
 
 htmlText :: Builtin
@@ -289,33 +290,67 @@ frameResult = Builtin "frameResult" ["frameResult_frame"] . TrailFnBody $ \i tra
     [] -> Left [UndefinedVar i "NO RESULT"]
     xs -> Right $ last xs
 
+event :: Builtin
+event = Builtin "event" ["event_instant", "event_details"] Record
 
+construct :: Builtin
+construct = Builtin "construct" ["construct_with", "construct_payload"] $ FnBody $ \i e g -> do
+  (Suspension constructorId _ _) <- getSuspension i "builtin-construct-construct_with" e
+  payload <- get i "builtin-construct-construct_payload" e
+  Right $ unionVal e constructorId payload
+
+
+unionVal :: BuiltinEnv -> CodeDbId -> BuiltinVal -> BuiltinVal
+unionVal env constructorId payload = Thunk (Set.fromList [constructorId]) env $ Id.WithId dubiousId $ Identity $ ThunkFn $ \e g -> do
+    caseThunkable <- getThunkable dubiousId (codeDbIdText constructorId) e
+    callOneArgThunkable dubiousId  "construct" caseThunkable payload
+  where dubiousId = CodeDbId "builtin-construct-unionVal"
 
 builtins :: [Builtin]
-builtins = [ plus, minus
+builtins = [ event, construct
+           , plus, minus
            , listConcat, listAdd, listEmpty, listMap, listFilter, listLength, listSum
            , numberToText
            , suspensionFrameList, frameArg, frameResult
-           , htmlText, htmlButton, htmlTextInput, htmlElementEvents]
+           , htmlText, htmlButton, htmlTextInput, htmlElementEvents
+           ]
+
+data BuiltinUnion = BuiltinUnion Name [Name]
+
+htmlEventDetails :: BuiltinUnion
+htmlEventDetails = BuiltinUnion "htmlEventDetails" ["htmlEventDetails_textChange", "htmlEventDetails_click"]
+
+builtinUnions :: [BuiltinUnion]
+builtinUnions = [ htmlEventDetails ]
 
 builtinId :: Builtin -> Id
-builtinId builtin = "builtin-" `T.append` (builtin ^. name)
+builtinId builtin = builtinIdFromName (builtin ^. name)
+
+builtinIdFromName :: T.Text -> Id
+builtinIdFromName name = "builtin-" `T.append` name
 
 
 functionIds :: Map Name CodeDbId
 functionIds = Map.fromList [(builtin ^. name, CodeDbId $ builtinId builtin) | builtin <- builtins]
 
+argsIdsFromPrefix :: T.Text -> [T.Text] -> [(Name, CodeDbId)]
+argsIdsFromPrefix prefix names = [(argName, CodeDbId $ argId argName)| argName <- names]
+  where argId :: ArgName -> Id
+        argId argName = prefix `T.append` "-" `T.append` argName
+
+
 
 builtinArgsIds :: Builtin -> [(Name, CodeDbId)]
-builtinArgsIds builtin = [(argName, CodeDbId $ argId builtin argName)| argName <- builtin ^. argNames]
-  where argId :: Builtin -> ArgName -> Id
-        argId builtin argName = builtinId builtin `T.append` "-" `T.append` argName
+builtinArgsIds builtin = argsIdsFromPrefix (builtinId builtin) (builtin ^. argNames)
 
 builtinArgsIdsSet :: Builtin -> Set CodeDbId
 builtinArgsIdsSet = Set.fromList . map snd . builtinArgsIds
 
+builtinUnionsArgsIds :: BuiltinUnion -> [(Name, CodeDbId)]
+builtinUnionsArgsIds (BuiltinUnion name constructors) = argsIdsFromPrefix (builtinIdFromName name) constructors
+
 allArgIds :: Map Name CodeDbId
-allArgIds = Map.fromList $ foldMap builtinArgsIds builtins
+allArgIds = Map.fromList $ foldMap builtinArgsIds builtins ++ foldMap builtinUnionsArgsIds builtinUnions
 
 env :: Env CodeDbId
 env = Map.fromList 
@@ -325,5 +360,6 @@ env = Map.fromList
                                                             ResolvedFnBody fn -> ThunkResolvedFn $ \magic env globalEnv resolved -> do fn magic (CodeDbId $ builtinId builtin) env globalEnv resolved
                                                             EvalFnBody fn -> ThunkEvalFn $ \env globalEnv eval -> fn (CodeDbId $ builtinId builtin) env globalEnv eval
                                                             TrailFnBody fn -> ThunkTrailFn $ \trail env globalEnv -> do fn (CodeDbId $ builtinId builtin) trail env globalEnv
+                                                            Record -> ThunkRecord
           )
         | builtin <- builtins]

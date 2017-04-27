@@ -10,6 +10,7 @@ import qualified Data.IORef as IORef
 import qualified Data.List as List
 import Data.Map (Map)
 import qualified Data.Map as Map
+import Data.Maybe (catMaybes)
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
@@ -63,11 +64,19 @@ eval :: [Lam.BindingWithId CodeDbId]
 eval bindingsWithIds initialEnv = do
   resolved <- (_Left %~ pure . ParseError) $ Lam.resolveVars (Lam.GlobalNames Builtins.functionIds Builtins.allArgIds) bindingsWithIds
 
-  let maybeMainExp = fmap (\(_, _, _, exp) -> exp) . List.find (\(bindingId, boundId, name, exp) -> name == "main") $ (Eval.flattenBinding <$> bindingsWithIds)
+  let maybeMainExp = Lam.bindingExp =<< List.find ((== "main") . Lam.bindingName) bindingsWithIds
   mainExp <- maybe (Left [RuntimeError $ Eval.UndefinedVar (CodeDbId "toplevel") "main"]) Right maybeMainExp
 
-  let toplevelEnv = let assocs = (\(bindingId, boundId, name, exp) -> (boundId, Eval.Thunk Set.empty Map.empty $ Id.WithId bindingId $ Identity $ Eval.ThunkExp exp)) . Eval.flattenBinding <$> bindingsWithIds
-                     in Map.unions [Map.fromList assocs, Builtins.env]
+  let toplevelEnv = let assocs = flip fmap bindingsWithIds $ \binding -> 
+                                   flip fmap (Lam.bindingExp binding) $ \exp ->
+                                     ( Lam.expTopId exp
+                                     , Eval.Thunk Set.empty
+                                                  Map.empty
+                                                  $ Id.WithId (binding ^. Id.id)
+                                                              (Identity . Eval.ThunkExp $ exp)
+                                     )
+                                                       
+                     in Map.unions [Map.fromList . catMaybes $ assocs, Builtins.env]
 
   iterateTrail mempty (evalWithTrail resolved toplevelEnv bindingsWithIds initialEnv mainExp)
 
