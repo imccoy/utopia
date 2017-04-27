@@ -9,12 +9,14 @@ import           Control.Monad (void, filterM, join)
 import qualified Data.IORef as IORef
 import           Data.IORef (IORef)
 import qualified Data.JSString as JSS
+import qualified Data.Set as Set
+import           Data.Set (Set)
 import qualified Data.Map as Map
 import           Data.Map (Map)
 import           Data.Maybe (fromMaybe, catMaybes)
 import qualified Data.Text as T
 import           Data.Text (Text)
-import           Data.Time.Clock (getCurrentTime)
+import           Data.Time.Clock (getCurrentTime, UTCTime)
 
 import           GHCJS.VDOM
 import           GHCJS.VDOM.QQ
@@ -38,6 +40,7 @@ textDiv :: String -> VNode
 textDiv x = E.div () [ch|c|]
   where
     c = E.text . JSS.pack $ x
+
 
 data Event = Event { eventInstant :: Text, eventDetails :: EventDetails }
 
@@ -87,12 +90,17 @@ envFromEvents = Map.fromList . map envFromEvent . Map.assocs
                              ,(CodeDbId "builtin-event-event_details", wrapEventDetails event)
                              ]
 
+newInstant :: UTCTime -> Set Text -> (Set Text, Text)
+newInstant time instants = (Set.insert free instants, free)
+  where
+    free = head . filter (\s -> not $ Set.member s instants) . map (\n -> T.pack $ show time ++ show n) $ [0..]
 
 
 runWeb :: VMount -> IO ()
 runWeb mountPoint = do (bindingsWithIds, projection) <- Run.projectCode Code.web
                        events <- IORef.newIORef Map.empty
-                       let rerender frame eventDetails = do id <- T.pack . show <$> getCurrentTime
+                       instants <- IORef.newIORef Set.empty
+                       let rerender frame eventDetails = do id <- getCurrentTime >>= \time -> IORef.atomicModifyIORef instants (newInstant time)
                                                             currentEvents <- IORef.atomicModifyIORef events (addEvent (Event id eventDetails) frame)
                                                             render rerender mountPoint $ Run.runProjectionWithEnv bindingsWithIds (envFromEvents currentEvents)
                        render rerender mountPoint $ Run.runProjectionWithEnv bindingsWithIds Map.empty

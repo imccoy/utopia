@@ -97,11 +97,19 @@ listSum list = app (var "listSum")
                    [ ("listSum_list", list)
                    ]
 
+
 listMap :: Exp -> Exp -> Exp
 listMap f list = app (var "listMap")
                      [ ("listMap_list", list)
                      , ("listMap_f", f)
                      ]
+
+
+
+listConcat :: Exp -> Exp
+listConcat lists = app (var "listConcat")
+                       [ ("listConcat_lists", lists)
+                       ]
 
 listFilter :: Exp -> Exp -> Exp
 listFilter f list = app (var "listFilter")
@@ -203,27 +211,38 @@ todoWeb = [ expBinding "todoRecord" $ record ["todoRecord_id", "todoRecord_text"
               listOf [ app (var "todoTextBox") []
                      , app (var "todoAddButton") []
                      ]
+          , expBinding "savedTodos" $ lam [] $
+              listConcat $ listMap (lam ["savedTodoForms_mapFrames"] $
+                               listConcat $ listMap (lam ["savedTodoForm_frame"] $ 
+                                                         listMap (lam ["event"] $
+                                                                      app (var "todoRecord")
+                                                                          [("todoRecord_id", frameArgLit (var "event") "event_instant")
+                                                                          ,("todoRecord_text", app (frameArgLit (var "event") "event_details")
+                                                                                                   [("htmlEventDetails_textChange", var "identityFunction")]
+                                                                           )
+                                                                          ])
+                                                                 (htmlElementEvents (frameResult (var "savedTodoForm_frame")))
+                                                     )
+                                                     (suspensionFrameList (suspend $ suspendSpec "todoTextBox" 
+                                                                                                 []
+                                                                                                 [suspendSpec "todoForm" [("todoForm_n", frameArgLit (var "savedTodoForms_mapFrames") "todoForm_n")] []]))
+                           )
+                           (listFilter (lam ["savedTodoForms_filterFrames"] $
+                                            app (var "clickCount")
+                                                [("clickCount_button", suspend $ suspendSpec "todoAddButton" 
+                                                                                             []
+                                                                                             [suspendSpec "todoForm" [("todoForm_n", frameArgLit (var "savedTodoForms_filterFrames") "todoForm_n")] []])]
+                                       )
+                                       (suspensionFrameList (suspend $ suspendSpec "todoForm" [] []))
+                           )
+
           , expBinding "savedTodoWidgets" $ lam [] $
-              listMap (lam ["savedTodoForms_mapFrames"] $
-                          listMap (lam ["savedTodoForm_frame"] $ 
-                                      listMap ((lam ["event"] (htmlText (app (frameArgLit (var "event") "event_details") [("htmlEventDetails_textChange", var "identityFunction")]))))
-                                              (htmlElementEvents (frameResult (var "savedTodoForm_frame")))
-                                  )
-                                  (suspensionFrameList (suspend $ suspendSpec "todoTextBox" 
-                                                                              []
-                                                                              [suspendSpec "todoForm" [("todoForm_n", frameArgLit (var "savedTodoForms_mapFrames") "todoForm_n")] []]))
+              listMap (lam ["savedTodos_mapTodo"] $
+                           htmlText $ (frameArgLit (var "savedTodos_mapTodo") "todoRecord_text")
                       )
-                      (listFilter (lam ["savedTodoForms_filterFrames"] $
-                                       app (var "clickCount")
-                                           [("clickCount_button", suspend $ suspendSpec "todoAddButton" 
-                                                                                        []
-                                                                                        [suspendSpec "todoForm" [("todoForm_n", frameArgLit (var "savedTodoForms_filterFrames") "todoForm_n")] []])]
-                                  )
-                                  (suspensionFrameList (suspend $ suspendSpec "todoForm" [] []))
-                      )
+                      (var "savedTodos")
           , expBinding "unsavedTodoForm" $ lam [] $
               app (var "todoForm") [("todoForm_n", listLength (app (var "savedTodoWidgets") []))]
-              --app (var "todoForm") [("todoForm_n", lit $ Number 0)]
           , expBinding "main" $ lam [] $
               listOf [ app (var "unsavedTodoForm") []
                      , app (var "savedTodoWidgets") []

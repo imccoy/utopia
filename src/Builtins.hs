@@ -151,11 +151,19 @@ boolNot = Builtin "not" ["not_1"] . FnBody $ \i e g -> do
   n <- getNumber i "builtin-+-+_1" e
   pure $ Primitive $ Prim.Number $ if n == 0 then 1 else 0
 
-listConcat :: Builtin
-listConcat = Builtin "listConcat" ["listConcat_1", "listConcat_2"] . FnBody $ \i e g -> do
-  n <- getList i "builtin-listConcat-listConcat_1" e
-  m <- getList i "builtin-listConcat-listConcat_2" e
+listAppend :: Builtin
+listAppend = Builtin "listAppend" ["listAppend_1", "listAppend_2"] . FnBody $ \i e g -> do
+  n <- getList i "builtin-listAppend-listAppend_1" e
+  m <- getList i "builtin-listAppend-listAppend_2" e
   pure $ ValList $ n ++ m
+
+listConcat :: Builtin
+listConcat = Builtin "listConcat" ["listConcat_lists"] . FnBody $ \i e g -> do
+  listVals <- getList i "builtin-listConcat-listConcat_lists" e
+  lists <- eitherList $ asList i <$> listVals
+  pure $ ValList $ concat lists
+
+
 
 listAdd :: Builtin
 listAdd = Builtin "listAdd" ["listAdd_elem", "listAdd_list"] . FnBody $ \i e g -> do
@@ -309,7 +317,7 @@ unionVal env constructorId payload = Thunk (Set.fromList [constructorId]) env $ 
 builtins :: [Builtin]
 builtins = [ event, construct
            , plus, minus
-           , listConcat, listAdd, listEmpty, listMap, listFilter, listLength, listSum
+           , listAppend, listAdd, listConcat, listEmpty, listMap, listFilter, listLength, listSum
            , numberToText
            , suspensionFrameList, frameArg, frameResult
            , htmlText, htmlButton, htmlTextInput, htmlElementEvents
