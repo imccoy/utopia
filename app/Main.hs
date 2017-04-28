@@ -19,7 +19,7 @@ import CodeDb
 import qualified Diff
 import qualified DiffTree
 import qualified Eval
-import Run (Projection(..), projectionCode, projectionNames, ProjectionCode(..), projectCode, runProjection)
+import Run (Projection(..), projectionCode, projectionNames, ProjectionCode(..), projectCode, runProjection, Error(..))
 
 --import qualified Html
 
@@ -70,7 +70,9 @@ main = do
 --    inM . putStrLn . T.pack . show =<< ch_evaluated
 
   let evaluated = runProjection oneshotBindingsWithIds
-  putStrLn . T.pack . (either show Eval.pprintVal) $ evaluated
+  case evaluated of
+    Right success -> putStrLn . T.pack . Eval.pprintVal $ success
+    Left failure -> mapM_ printError failure
     
 
 --  let html = renderHtml $ Html.mappingHtml reversedDiffResult diffResult
@@ -82,6 +84,10 @@ main = do
 --  void $ spawnCommand $ "open " ++ filePath
   return ()
 
+printError :: Error -> IO ()
+printError (RuntimeError (Eval.TypeError i val message)) = do putStrLn . T.concat $ ["Type Error at ", T.pack . show $ i, message]
+                                                              putStrLn . T.pack . Eval.pprintVal $ val
+printError err = do putStrLn . T.pack . show $ err
 
 projectionCodeDbIds :: ProjectionCode -> Set CodeDbId
 projectionCodeDbIds (ProjectionCode id _ children) = id `Set.insert` (Set.unions $ map projectionCodeDbIds children)

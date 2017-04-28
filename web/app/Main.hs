@@ -12,9 +12,11 @@ import           Data.Set (Set)
 import qualified Data.Map as Map
 import           Data.Map (Map)
 import           Data.Maybe (fromMaybe)
+import qualified Data.Ratio as Rational
 import qualified Data.Text as T
 import           Data.Text (Text)
-import           Data.Time.Clock (getCurrentTime, UTCTime)
+import           Data.Time.Clock (UTCTime(utctDay, utctDayTime), getCurrentTime)
+import           Data.Time.Calendar (Day(toModifiedJulianDay))
 
 import           GHCJS.VDOM
 import           GHCJS.VDOM.QQ
@@ -39,7 +41,7 @@ textDiv x = E.div () [ch|c|]
     c = E.text . JSS.pack $ x
 
 
-data Event = Event { eventInstant :: Text, eventDetails :: EventDetails }
+data Event = Event { eventInstant :: [Integer], eventDetails :: EventDetails }
 
 data EventDetails = ClickEvent | ChangeEvent Text
   deriving (Eq, Show)
@@ -87,14 +89,19 @@ envFromEvents :: Map (Eval.Frame CodeDbId) [Event] -> Map CodeDbId (Val CodeDbId
 envFromEvents = Map.fromList . map envFromEvent . Map.assocs
   where envFromEvent (frame, events) = (CodeDbId $ "events-" `T.append` (T.pack . show $ frame), ValList $ eventVal <$> events)
         eventVal event = Eval.ValFrame . Eval.Frame Nothing (CodeDbId "builtin-event") . Map.fromList $ 
-                             [(CodeDbId "builtin-event-event_instant", Primitive . Prim.Text . eventInstant $ event)
+                             [(CodeDbId "builtin-event-event_instant", Eval.ValList $ Eval.Primitive . Prim.Number <$> eventInstant event)
                              ,(CodeDbId "builtin-event-event_details", wrapEventDetails event)
                              ]
 
-newInstant :: UTCTime -> Set Text -> (Set Text, Text)
+newInstant :: UTCTime -> Set [Integer] -> (Set [Integer], [Integer])
 newInstant time instants = (Set.insert free instants, free)
   where
-    free = head . filter (\s -> not $ Set.member s instants) . map (\n -> T.pack $ show time ++ show n) $ [(0::Integer)..]
+    diffTimeRational = toRational $ utctDayTime time
+    instantRoot = [ toModifiedJulianDay . utctDay $ time
+                  , Rational.numerator diffTimeRational `div` Rational.denominator diffTimeRational
+                  , Rational.numerator diffTimeRational `mod` Rational.denominator diffTimeRational
+                  ]
+    free = head . filter (\s -> not $ Set.member s instants) . map (\n -> instantRoot ++ [n]) $ [(0::Integer)..]
 
 
 runWeb :: VMount -> IO ()

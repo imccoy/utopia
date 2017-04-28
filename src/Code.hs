@@ -68,8 +68,35 @@ nestedMaps = [ expBinding "main" $ lam [] $
                         ]
              ]
 
+findMax :: [Binding Identity]
+findMax = [ expBinding "main" $ lam [] $ 
+                app (var "listReduce")
+                    [("listReduce_list", listOf $ lit . Number <$> [1,3,5,9,8,7,6,4,2])
+                    ,("listReduce_base", lit . Number $ 0)
+                    ,("listReduce_merge_curr", lamArgId "findMax_curr")
+                    ,("listReduce_merge_next", lamArgId "findMax_next")
+{-
+                    ,("listReduce_merge", lam ["findMax_curr", "findMax_next"] $
+                                              app (var "+") 
+                                                  [("+_1", var "findMax_curr"), ("+_2", var "findMax_next")])
+-}
+                    ,("listReduce_merge", lam ["findMax_curr", "findMax_next"] $
+                                              app (app (var "numberCompare")
+                                                       [("numberCompare_1", var "findMax_next")
+                                                       ,("numberCompare_2", var "findMax_curr")
+                                                       ]
+                                                  )
+                                                  [("compareResult_1_smaller", lam ["unused_1"] $ var "findMax_curr")
+                                                  ,("compareResult_1_greater", lam ["unused_2"] $ var "findMax_next")
+                                                  ,("compareResult_equal", lam ["unused_3"] $ var "findMax_next")
+                                                  ]
+                     ) 
+                    ]
+          ]
+
+
 oneshot :: [Binding Identity]
-oneshot = tracey
+oneshot = findMax
 
 -- data Event details env = Event Time details env
 -- data EventDetails = ButtonClick

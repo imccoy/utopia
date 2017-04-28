@@ -3,6 +3,7 @@ module Builtins (functionIds, allArgIds, EvalError(..), Builtin, builtinsEnv, un
 import Control.Lens
 import Control.Monad ((>=>))
 import Data.Either (partitionEithers)
+import Data.Foldable (foldrM)
 import qualified Data.List as List
 import qualified Data.Map as Map
 import Data.Map (Map)
@@ -134,6 +135,11 @@ minus = Builtin "-" ["-_1", "-_2"] . FnBody $ \i e _ -> do
   m <- getNumber i "builtin----_2" e
   pure $ Primitive $ Prim.Number $ n - m
 
+numberCompare :: Builtin
+numberCompare = Builtin "numberCompare" ["numberCompare_1", "numberCompare_2"] . FnBody $ \i e _ -> do
+  n <- getNumber i "builtin-numberCompare-numberCompare_1" e
+  m <- getNumber i "builtin-numberCompare-numberCompare_2" e
+  pure $ makeCompareResult e $ n `compare` m
 
 listAppend :: Builtin
 listAppend = Builtin "listAppend" ["listAppend_1", "listAppend_2"] . FnBody $ \i e _ -> do
@@ -200,6 +206,20 @@ listSum = Builtin "listSum" ["listSum_list"] . FnBody $ \i e _ -> do
     ([], ints) -> pure $ Primitive $ Prim.Number $ fromIntegral $ sum ints
     (errs, _) -> Left $ concat errs
 
+listReduce :: Builtin
+listReduce = Builtin "listReduce" ["listReduce_list", "listReduce_base", "listReduce_merge", "listReduce_merge_curr", "listReduce_merge_next"] . EvalFnBody $ \i e _ eval -> do
+  list <- getList i "builtin-listReduce-listReduce_list" e
+  base <- get i "builtin-listReduce-listReduce_base" e
+  (thunkNeeded, thunkEnv, thunkBody) <- getThunkable i "builtin-listReduce-listReduce_merge" e
+  (Suspension argCurr _ _) <- getSuspension i "builtin-listReduce-listReduce_merge_curr" e
+  (Suspension argNext _ _) <- getSuspension i "builtin-listReduce-listReduce_merge_next" e
+  needed' <- if thunkNeeded == Set.fromList [argCurr, argNext]
+               then pure Set.empty
+               else Left [TypeError i (Thunk thunkNeeded thunkEnv thunkBody) $ "Wrong args for listReduce"]
+  let f trail_next trail_curr = Eval.withEitherTrail eval (Right $ (\next curr -> Thunk needed' (Map.insert argCurr curr . Map.insert argNext next $ thunkEnv) thunkBody) <$> trail_next <*> trail_curr)
+  foldrM f (noTrail base) (noTrail <$> list)
+  
+
 
 frameArg :: Builtin
 frameArg = Builtin "frameArg" ["frameArg_frame", "frameArg_arg"] . ResolvedFnBody $ \_ i e _ _ -> do
@@ -217,6 +237,13 @@ htmlElementEvents = Builtin "htmlElementEvents" ["htmlElementEvents_element"] . 
     [Primitive (Prim.Text "button"), _, ValFrame frame] -> eventsByToken frame
     [Primitive (Prim.Text "textInput"), ValFrame frame] -> eventsByToken frame
     fields -> Left [TypeError i (ValList fields) $ " is not an element with events"]
+
+
+instantCompare :: Builtin
+instantCompare = Builtin "instantCompare" ["instantCompare_1", "instantCompare_2"] . FnBody $ \i e _ -> do
+  n <- getNumber i "builtin-instantCompare-instantCompare_1" e
+  m <- getNumber i "builtin-instantCompare-instantCompare_2" e
+  pure $ makeCompareResult e $ n `compare` m
 
 
 htmlText :: Builtin
@@ -289,20 +316,30 @@ unionVal env constructorId payload = Thunk (Set.fromList [constructorId]) env $ 
 
 builtins :: [Builtin]
 builtins = [ event, construct
-           , plus, minus
-           , listAppend, listAdd, listConcat, listEmpty, listMap, listFilter, listLength, listSum
+           , plus, minus, numberCompare
+           , listAppend, listAdd, listConcat, listEmpty, listMap, listFilter, listReduce, listLength, listSum
            , numberToText
            , suspensionFrameList, frameArg, frameResult
-           , htmlText, htmlButton, htmlTextInput, htmlElementEvents
+           , htmlText, htmlButton, htmlTextInput, htmlElementEvents, instantCompare
            ]
+
+makeCompareResult :: BuiltinEnv -> Ordering -> BuiltinVal
+makeCompareResult env c = unionVal env (CodeDbId . con $ c) (Primitive . Prim.Text . T.pack . show $ c)
+  where con LT = "builtin-compareResult-compareResult_1_smaller"
+        con EQ = "builtin-compareResult-compareResult_equal"
+        con GT = "builtin-compareResult-compareResult_1_greater"
 
 data BuiltinUnion = BuiltinUnion Name [Name]
 
 htmlEventDetails :: BuiltinUnion
 htmlEventDetails = BuiltinUnion "htmlEventDetails" ["htmlEventDetails_textChange", "htmlEventDetails_click"]
 
+compareResult :: BuiltinUnion
+compareResult = BuiltinUnion "compareResult" ["compareResult_1_greater", "compareResult_1_smaller", "compareResult_equal"]
+
+
 builtinUnions :: [BuiltinUnion]
-builtinUnions = [ htmlEventDetails ]
+builtinUnions = [ compareResult, htmlEventDetails ]
 
 builtinId :: Builtin -> Id
 builtinId builtin = builtinIdFromName (builtin ^. name)
