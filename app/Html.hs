@@ -26,15 +26,15 @@ mappingHtml reverseMapping mapping = do
 
 srcMapping :: ReverseMapping -> Html
 srcMapping reverseMapping =
-  let label = reverseMapping ^. reverseMappingSrc . diffTree . DiffTree.label
+  let nodeLabel = reverseMapping ^. reverseMappingSrc . diffTree . DiffTree.label
       diffTreeName = reverseMapping ^. reverseMappingSrc . diffTree . DiffTree.name . non ""
    in div ! class_ "src-node" $ do
-     if label == "METADATA-REF"
+     if nodeLabel == "METADATA-REF"
         then a ! href (textValue $ "#" `T.append` diffTreeName) $ do (text ">")
         else 
           div ! class_ "src-node__label" $ do
             a ! name (stringValue $ show $ reverseMapping ^. reverseMappingSrc . srcNodeId) $ do
-              text label
+              text nodeLabel
               text " "
               text diffTreeName
             forM_ (reverseMapping ^. reverseMappingDsts) $ \(dst, cost) -> do

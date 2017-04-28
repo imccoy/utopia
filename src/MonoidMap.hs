@@ -12,4 +12,6 @@ instance (Ord k, Monoid v) => Monoid (MonoidMap k v) where
 
 empty :: MonoidMap k v
 empty = MonoidMap Map.empty
+
+singleton :: k -> v -> MonoidMap k v
 singleton k v = MonoidMap (Map.singleton k v)

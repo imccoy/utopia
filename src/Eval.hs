@@ -3,11 +3,7 @@ module Eval where
 
 import Prelude hiding (id, exp)
 import Control.Lens hiding (reuses)
-import Control.Monad
 import Data.Either (partitionEithers)
-import Data.IORef (IORef)
-import qualified Data.IORef as IORef
-import qualified Data.Foldable
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Set (Set)
@@ -18,11 +14,7 @@ import Data.Functor.Foldable.Extended
 import qualified Id
 import qualified Lam
 import Lam (BindingWithId, ExpWithId)
-import MonoidMap (MonoidMap(..))
-import qualified MonoidMap
 import qualified Prim
-
-import Debug.Trace
 
 flattenBinding :: BindingWithId i -> Maybe (i, i, Lam.Name, ExpWithId i)
 flattenBinding binding = flip fmap (Lam.bindingExp binding) $ \exp -> 
@@ -63,6 +55,7 @@ instance Show i => Show (Thunk i) where
   show (ThunkTrailFn _) = "thunktrailfn"
   show (ThunkEvalFn _) = "thunkevalfn"
   show (ThunkExp _) = "thunkexp"
+  show (ThunkRecord) = "thunkrecord"
 
 
 pprintVal :: Show i => Val i -> String
@@ -123,20 +116,22 @@ instance (Ord i, Show i) => Applicative (Trailing i) where
   pure v = noTrail v
   Trailing t1 f <*> Trailing t2 v = Trailing (mappend t1 t2) (f v)
 
+noTrail :: Ord i => a -> Trailing i a
 noTrail v = Trailing mempty v
 
+dropTrail :: Trailing t t1 -> t1
 dropTrail (Trailing _ v) = v
 
+withTrail :: (Trail t -> Trail i) -> Trailing t a -> Trailing i a
 withTrail f (Trailing t v) = Trailing (f t) v
 
 expandTrail :: (Ord i, Show i) => (Frame i, Val i) -> Trailing i v -> Trailing i v
 expandTrail frameWithResult = withTrail (Set.insert frameWithResult)
 
 withEitherTrail :: (Ord i, Show i) => (v1 -> Either e (Trailing i v2)) -> Either e (Trailing i v1) -> Either e (Trailing i v2)
-withEitherTrail f (Left e) = Left e
-withEitherTrail f (Right (Trailing t1 v1)) = case f v1 of
-                                               Left e -> Left e
-                                               Right (Trailing t2 v2) -> Right $ Trailing (t1 `mappend` t2) v2
+withEitherTrail f e = do Trailing t1 v1 <- e
+                         Trailing t2 v2 <- f v1
+                         pure $ Trailing (t1 `mappend` t2) v2
 
 eval :: (Ord i, Show i)
   => Lam.Resolved i
@@ -165,8 +160,8 @@ eval resolved globalEnv parentFrames env trail (Fix (Lam.ExpW (Id.WithId id (Ide
                       Nothing -> Left [UndefinedVar id var]
                       Just val -> Right $ noTrail val
 
-    Lam.SuspendF suspendSpec -> let evalSuspension (Lam.SuspendSpec (Id.WithId id (Identity name)) args parents) = do
-                                      case Map.lookup id resolved of
+    Lam.SuspendF suspendSpec -> let evalSuspension (Lam.SuspendSpec (Id.WithId suspensionId (Identity name)) args parents) = do
+                                      case Map.lookup suspensionId resolved of
                                         Nothing -> Left [UndefinedVar id name]
                                         Just resolvedId -> do argsEnv <- evalArgs resolved globalEnv parentFrames env trail args
                                                               parentSuspensions <- eitherList $ (evalSuspension <$> parents)
@@ -223,6 +218,7 @@ lamTopCon (Lam.VarF _) = "VarF"
 lamTopCon (Lam.SuspendF _) = "SuspendF"
 lamTopCon (Lam.LamArgIdF _) = "LamArgIdF"
 lamTopCon (Lam.LitF _) = "LitF"
+lamTopCon (Lam.RecordF _) = "RecordF"
 
 
 evalThunk :: (Show i, Ord i)
@@ -254,4 +250,5 @@ lookupVarByResolvedId env globalEnv k = case Map.lookup k env of
                                           Nothing -> Map.lookup k . unGlobalEnv $ globalEnv
 
 
+lookupVarId :: Ord k => k -> Map k a -> Maybe a
 lookupVarId id resolved = Map.lookup id resolved

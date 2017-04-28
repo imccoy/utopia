@@ -22,11 +22,13 @@ makeFields ''DstNode
 newtype SrcNodeId = SrcNodeId Text
   deriving (Eq, Ord, Show)
 
+srcNodeIdText :: SrcNodeId -> Text
 srcNodeIdText (SrcNodeId t) = t
 
 newtype DstNodeId = DstNodeId Text
   deriving (Eq, Ord, Show)
 
+dstNodeIdText :: DstNodeId -> Text
 dstNodeIdText (DstNodeId t) = t
 
 srcNodeId :: Getter SrcNode SrcNodeId

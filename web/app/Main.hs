@@ -2,18 +2,16 @@ module Main where
 
 import Prelude hiding (id)
 
-import Debug.Trace
 import qualified Unsafe.Coerce
 
-import           Control.Monad (void, filterM, join)
+import           Control.Monad (void)
 import qualified Data.IORef as IORef
-import           Data.IORef (IORef)
 import qualified Data.JSString as JSS
 import qualified Data.Set as Set
 import           Data.Set (Set)
 import qualified Data.Map as Map
 import           Data.Map (Map)
-import           Data.Maybe (fromMaybe, catMaybes)
+import           Data.Maybe (fromMaybe)
 import qualified Data.Text as T
 import           Data.Text (Text)
 import           Data.Time.Clock (getCurrentTime, UTCTime)
@@ -24,7 +22,6 @@ import qualified GHCJS.VDOM.Element as E
 import qualified GHCJS.VDOM.Event as Ev
 import qualified GHCJS.VDOM.Attribute as A
 
-import           GHCJS.Foreign.Callback
 import           GHCJS.Foreign.QQ
 import           GHCJS.Types
 
@@ -47,6 +44,7 @@ data Event = Event { eventInstant :: Text, eventDetails :: EventDetails }
 data EventDetails = ClickEvent | ChangeEvent Text
   deriving (Eq, Show)
 
+wrapEventDetails :: Event -> Eval.Val CodeDbId
 wrapEventDetails e = case eventDetails e of
   ClickEvent -> Builtins.unionVal Map.empty (CodeDbId "builtin-htmlEventDetails-htmlEventDetails_click")
                                             (Primitive $ Prim.Text "")
@@ -58,6 +56,8 @@ type AllEvents = Map (Eval.Frame CodeDbId) [Event]
 addEvent :: Event -> Eval.Frame CodeDbId -> AllEvents -> (AllEvents,AllEvents)
 addEvent event frame allEvents = let result = addEvent' event frame allEvents
                                   in (result,result)
+
+addEvent' :: Ord k => a -> k -> Map k [a] -> Map k [a]
 addEvent' event = Map.alter (\events -> (event:) <$> (events `mappend` (Just []))) 
 
 inputTextFromEvent :: Ev.Event -> IO (Maybe Text)
@@ -67,13 +67,13 @@ inputTextFromEvent ev = do let evVal = (Unsafe.Coerce.unsafeCoerce ev :: JSVal)
 
 
 renderVal :: (Show i) => (Eval.Frame i -> EventDetails -> IO ()) -> Val i -> VNode
-renderVal onEvent (ValList [ Primitive (Text "text")
+renderVal _       (ValList [ Primitive (Text "text")
                            , Primitive (Text t)
                            ]) = textDiv . T.unpack $ t
 renderVal onEvent (ValList [ Primitive (Text "button")
                            , Primitive (Text label)
                            , ValFrame frame
-                           ]) = E.button (Ev.click (\e -> onEvent frame ClickEvent))
+                           ]) = E.button (Ev.click (\_ -> onEvent frame ClickEvent))
                                          [E.text . JSS.pack . T.unpack $ label]
 renderVal onEvent (ValList [ Primitive (Text "textInput")
                            , ValFrame frame
@@ -81,6 +81,7 @@ renderVal onEvent (ValList [ Primitive (Text "textInput")
                                         ([] :: [VNode])
 
 renderVal onEvent (ValList elems) = E.div () $ map (renderVal onEvent) elems
+renderVal _ _                     = textDiv "That ain't no element"
 
 envFromEvents :: Map (Eval.Frame CodeDbId) [Event] -> Map CodeDbId (Val CodeDbId)
 envFromEvents = Map.fromList . map envFromEvent . Map.assocs
@@ -93,11 +94,11 @@ envFromEvents = Map.fromList . map envFromEvent . Map.assocs
 newInstant :: UTCTime -> Set Text -> (Set Text, Text)
 newInstant time instants = (Set.insert free instants, free)
   where
-    free = head . filter (\s -> not $ Set.member s instants) . map (\n -> T.pack $ show time ++ show n) $ [0..]
+    free = head . filter (\s -> not $ Set.member s instants) . map (\n -> T.pack $ show time ++ show n) $ [(0::Integer)..]
 
 
 runWeb :: VMount -> IO ()
-runWeb mountPoint = do (bindingsWithIds, projection) <- Run.projectCode Code.web
+runWeb mountPoint = do (bindingsWithIds, _) <- Run.projectCode Code.web
                        events <- IORef.newIORef Map.empty
                        instants <- IORef.newIORef Set.empty
                        let rerender frame eventDetails = do id <- getCurrentTime >>= \time -> IORef.atomicModifyIORef instants (newInstant time)

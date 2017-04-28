@@ -3,35 +3,22 @@ module Run where
 import Prelude hiding (id, putStrLn)
 
 import Control.Lens hiding (children, mapping)
-import Control.Monad
-import Data.Either.Combinators (eitherToError, mapLeft)
-import Data.IORef (IORef)
-import qualified Data.IORef as IORef
 import qualified Data.List as List
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Maybe (catMaybes)
-import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
-import qualified Data.Text as T
-import Data.Text.IO
-import Safe hiding (at)
-import System.IO (openTempFile, hClose)
-import Text.Blaze.Html.Renderer.Utf8 (renderHtml)
 
 import qualified Builtins
-import qualified Code
 import CodeDb
 import CodeDbIdGen
-import qualified Diff
+--import qualified Diff
 import qualified DiffTree
 import qualified Eval
 import qualified Id
 import qualified Lam
 
-
-import Debug.Trace
 
 data ProjectionCode = ProjectionCode CodeDbId CodeDbType [ProjectionCode]
 projectionCodeId :: ProjectionCode -> CodeDbId
@@ -50,12 +37,11 @@ data Error = ParseError (Lam.NameResolutionError CodeDbId) | RuntimeError (Eval.
 
 evalWithTrail :: Lam.Resolved CodeDbId
               -> Eval.Env CodeDbId
-              -> [Lam.BindingWithId CodeDbId]
               -> Map CodeDbId (Eval.Val CodeDbId)
               -> Lam.ExpWithId CodeDbId
               -> Eval.Trail CodeDbId
               -> Either [Error] (Eval.Trailing CodeDbId (Eval.Val CodeDbId))
-evalWithTrail resolved toplevelEnv bindingsWithIds initialEnv mainExp trail =
+evalWithTrail resolved toplevelEnv initialEnv mainExp trail =
   (_Left %~ map RuntimeError) $ Eval.eval resolved (Eval.GlobalEnv toplevelEnv) (Eval.Frame Nothing (CodeDbId "TOPFRAME") Map.empty) initialEnv trail mainExp
 
 eval :: [Lam.BindingWithId CodeDbId]
@@ -68,17 +54,17 @@ eval bindingsWithIds initialEnv = do
   mainExp <- maybe (Left [RuntimeError $ Eval.UndefinedVar (CodeDbId "toplevel") "main"]) Right maybeMainExp
 
   let toplevelEnv = let assocs = flip fmap bindingsWithIds $ \binding -> 
-                                   flip fmap (Lam.bindingExp binding) $ \exp ->
-                                     ( Lam.expTopId exp
+                                   flip fmap (Lam.bindingExp binding) $ \boundExp ->
+                                     ( Lam.expTopId boundExp
                                      , Eval.Thunk Set.empty
                                                   Map.empty
                                                   $ Id.WithId (binding ^. Id.id)
-                                                              (Identity . Eval.ThunkExp $ exp)
+                                                              (Identity . Eval.ThunkExp $ boundExp)
                                      )
                                                        
-                     in Map.unions [Map.fromList . catMaybes $ assocs, Builtins.env]
+                     in Map.unions [Map.fromList . catMaybes $ assocs, Builtins.builtinsEnv]
 
-  iterateTrail mempty (evalWithTrail resolved toplevelEnv bindingsWithIds initialEnv mainExp)
+  iterateTrail mempty (evalWithTrail resolved toplevelEnv initialEnv mainExp)
 
 
 
@@ -92,9 +78,10 @@ iterateTrail trail1 next =
        then pure result
        else iterateTrail mergedTrails next
 
+projectCode :: [Lam.Binding Identity] -> IO ([Lam.BindingWithId CodeDbId], Projection)
 projectCode code = do
   bindingsWithIds <- runCodeDbIdGen $ mapM (Lam.bindingWithId nextCodeDbId) code
-  projection <- eitherToError $ mapLeft (userError . show) $ bindingsWithIdsProjection bindingsWithIds
+  let projection = bindingsWithIdsProjection bindingsWithIds
   pure (bindingsWithIds, projection)
 
 
@@ -107,10 +94,9 @@ runProjectionWithEnv :: [Lam.BindingWithId CodeDbId]
 runProjectionWithEnv bindingsWithIds initialEnv = 
   eval bindingsWithIds initialEnv
 
-bindingsWithIdsProjection :: [Lam.BindingWithId CodeDbId] -> Either (Lam.NameResolutionError Text) Projection
-bindingsWithIdsProjection bindingsWithIds = do
-  diffTrees <- Lam.bindingDiffTrees (Lam.GlobalNames (codeDbIdText <$> Builtins.functionIds) (codeDbIdText <$> Builtins.allArgIds)) (Lam.mapBindingId codeDbIdText <$> bindingsWithIds)
-  pure $ mconcat $ diffTreeProjection <$> diffTrees
+bindingsWithIdsProjection :: [Lam.BindingWithId CodeDbId] -> Projection
+bindingsWithIdsProjection bindingsWithIds = mconcat $ diffTreeProjection <$> diffTrees
+  where diffTrees = Lam.bindingDiffTrees (Lam.mapBindingId codeDbIdText <$> bindingsWithIds)
 
 diffTreeProjection :: DiffTree.DiffTree -> Projection
 diffTreeProjection (DiffTree.DiffTree id label name children) = 

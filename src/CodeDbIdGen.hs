@@ -13,6 +13,7 @@ import CodeDb (CodeDbId(..))
 
 type CodeDbIdGen a = ReaderT Text IO a
 
+chars :: Text
 chars = T.pack $ ['a'..'z'] ++ ['A'..'Z'] ++ ['0'..'9']
 
 -- TODO will this ever pick the last char in the chars?
@@ -21,7 +22,7 @@ randomAlphaNumChar = do n <-randomRIO (0::Int, T.length chars - 1)
                         pure $ (T.take 1 $ T.drop n chars)
 
 manyBits :: IO Text
-manyBits = T.concat <$> sequence [randomAlphaNumChar | _ <- [0..16] ]
+manyBits = T.concat <$> sequence [randomAlphaNumChar | _ <- [(0::Int)..16] ]
 
 runCodeDbIdGen :: CodeDbIdGen a -> IO a
 runCodeDbIdGen f = do

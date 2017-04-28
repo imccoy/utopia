@@ -17,10 +17,13 @@ instance (Ord i) => Ord (WithId i f v) where
   w1 `compare` w2 = _id w1 `compare` _id w2
 
 mapId :: (i1 -> i2) -> (WithId i1 f v) -> (WithId i2 f v)
-mapId f (WithId id v) = WithId (f id) v
+mapId f (WithId i v) = WithId (f i) v
 
 withIdEq :: Eq i => WithId i f v1 -> WithId i f v2 -> Bool
 withIdEq v1 v2 = _id v1 == _id v2
 
+unId :: WithId i Identity v -> v
 unId (WithId _ (Identity v)) = v
-withId id val = WithId id (pure val)
+
+withId :: Applicative f => i -> v -> WithId i f v
+withId i val = WithId i (pure val)

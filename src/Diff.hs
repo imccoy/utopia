@@ -70,7 +70,7 @@ inventedNodeCost = 100
 scoreMapping :: DstNode -> SrcNode -> [Mapping] -> Maybe Int
 scoreMapping dst src childMappings = do renameCost <- renameCostFor (src ^. diffTree . label) (src ^. diffTree . name) (dst ^. diffTree . label) (dst ^. diffTree . name)
                                         pure $ numUnmappedChildren * childInDstNotMappedCost + numDroppedSrcChildren * childInSrcNotHereCost + mappedChildrenCost + renameCost
-  where mappingTo src = Mapping dst (Just src) <$> renameCostFor (src ^. diffTree . label) (src ^. diffTree . name) (dst ^. diffTree . label) (dst ^. diffTree . name) <*> pure childMappings
+  where 
         (unmappedChildren, mappedChildren) = partition (isNothing . _mappingSrc) childMappings
         numUnmappedChildren = length unmappedChildren
         mappedChildrenCost = sum $ map _mappingCost mappedChildren
@@ -96,9 +96,9 @@ diff :: DiffTree -> DiffTree -> Mapping
 diff src dst = matchTrees (SrcNode src) (DstNode dst)
 
 zeroCostMappings :: Mapping -> Map SrcNodeId DstNodeId
-zeroCostMappings mapping =  case (mapping ^. mappingCost, mapping ^. mappingSrc) of
-                              (0, Just src) -> Map.singleton (src ^. srcNodeId) (mapping ^. mappingDst . dstNodeId)
-                              _ -> Map.unions $ map zeroCostMappings (mapping ^. mappingChildren)
+zeroCostMappings m = case (m ^. mappingCost, m ^. mappingSrc) of
+                       (0, Just src) -> Map.singleton (src ^. srcNodeId) (m ^. mappingDst . dstNodeId)
+                       _ -> Map.unions $ map zeroCostMappings (m ^. mappingChildren)
 
 data ReverseMapping = ReverseMapping { _reverseMappingSrc :: SrcNode
                                      , _reverseMappingDsts :: [(DstNode, Int)]

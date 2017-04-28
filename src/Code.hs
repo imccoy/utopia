@@ -68,6 +68,7 @@ nestedMaps = [ expBinding "main" $ lam [] $
                         ]
              ]
 
+oneshot :: [Binding Identity]
 oneshot = tracey
 
 -- data Event details env = Event Time details env
@@ -84,10 +85,10 @@ oneshot = tracey
 
 
 listAdd :: Exp -> Exp -> Exp
-listAdd elem list = app (var "listAdd")
-                        [ ("listAdd_list", list)
-                        , ("listAdd_elem", elem)
-                        ]
+listAdd newElem list = app (var "listAdd")
+                           [ ("listAdd_list", list)
+                           , ("listAdd_elem", newElem)
+                           ]
 
 listOf :: [Exp] -> Exp
 listOf exps = foldr listAdd (var "listEmpty") exps
@@ -118,7 +119,7 @@ listFilter f list = app (var "listFilter")
                         ]
 
 
-
+suspensionFrameList :: Exp -> Exp
 suspensionFrameList suspension = app (var "suspensionFrameList") 
                                      [("suspensionFrameList_suspension", suspension)]
 
@@ -191,14 +192,15 @@ buttonWeb = [ expBinding "incrementButton" $ lam [] $
             ] 
 
 letBindings :: [(Name, Exp)] -> Exp -> Exp
-letBindings namesExps exp = app (lam (map fst namesExps) exp)
-                                namesExps
+letBindings namesExps body = app (lam (map fst namesExps) body)
+                                 namesExps
 
 -- give a name to the function whose frame is going to bind these names
 namedLetBindings :: Name -> [(Name, Exp)] -> Exp -> Exp
 namedLetBindings name namesExps inner = letBindings [(name, lam (map fst namesExps) inner)]
                                                     (app (var name) namesExps)
 
+web :: [Binding Identity]
 web = todoWeb
 
 todoWeb :: [Binding Identity]
