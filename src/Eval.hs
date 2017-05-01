@@ -133,6 +133,9 @@ withEitherTrail f e = do Trailing t1 v1 <- e
                          Trailing t2 v2 <- f v1
                          pure $ Trailing (t1 `mappend` t2) v2
 
+invertTrailingEither :: Trailing i (Either e v) -> Either e (Trailing i v)
+invertTrailingEither (Trailing t v) = Trailing t <$> v
+
 eval :: (Ord i, Show i)
   => Lam.Resolved i
   -> GlobalEnv i

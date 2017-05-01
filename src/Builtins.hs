@@ -108,11 +108,18 @@ getThunkable i argId env = get i argId env >>= \v ->
     Thunk needed thunkEnv thunkBody -> Right (needed, thunkEnv, thunkBody)
     _ -> Left [TypeError i v " is not a thunk"]
 
-
 numberToText :: Builtin
 numberToText = Builtin "numberToText" ["numberToText_number"] . FnBody $ \i e _ -> do
   n <- getNumber i "builtin-numberToText-numberToText_number" e
   pure $ Primitive $ Prim.Text $ T.pack $ show n
+
+instantToText :: Builtin
+instantToText = Builtin "instantToText" ["instantToText_instant"] . FnBody $ \i e _ -> do
+  instantPieces <- getList i "builtin-instantToText-instantToText_instant" e
+  case instantPieces of
+    [a,b,c,d] -> pure $ Primitive $ Prim.Text $ T.pack $ show instantPieces
+    _ -> Left [TypeError i (ValList $ instantPieces) "is not an instant"]
+
 
 
 -- this could be something like:
@@ -210,15 +217,15 @@ listReduce :: Builtin
 listReduce = Builtin "listReduce" ["listReduce_list", "listReduce_base", "listReduce_merge", "listReduce_merge_curr", "listReduce_merge_next"] . EvalFnBody $ \i e _ eval -> do
   list <- getList i "builtin-listReduce-listReduce_list" e
   base <- get i "builtin-listReduce-listReduce_base" e
-  (thunkNeeded, thunkEnv, thunkBody) <- getThunkable i "builtin-listReduce-listReduce_merge" e
+  merge <- getThunkable i "builtin-listReduce-listReduce_merge" e
   (Suspension argCurr _ _) <- getSuspension i "builtin-listReduce-listReduce_merge_curr" e
   (Suspension argNext _ _) <- getSuspension i "builtin-listReduce-listReduce_merge_next" e
-  needed' <- if thunkNeeded == Set.fromList [argCurr, argNext]
-               then pure Set.empty
-               else Left [TypeError i (Thunk thunkNeeded thunkEnv thunkBody) $ "Wrong args for listReduce"]
-  let f trail_next trail_curr = Eval.withEitherTrail eval (Right $ (\next curr -> Thunk needed' (Map.insert argCurr curr . Map.insert argNext next $ thunkEnv) thunkBody) <$> trail_next <*> trail_curr)
+  let f trail_next trail_curr = Eval.withEitherTrail eval $ Eval.invertTrailingEither $ ((\next curr -> appThunkable i "listReduce" merge [(argCurr, curr), (argNext, next)]) <$> trail_next <*> trail_curr)
   foldrM f (noTrail base) (noTrail <$> list)
   
+appThunkable :: CodeDbId -> T.Text -> Thunkable -> [(CodeDbId, BuiltinVal)] -> Either [EvalError CodeDbId] BuiltinVal
+appThunkable i n (thunkNeeded, thunkEnv, thunkBody) args | thunkNeeded == (Set.fromList . fmap fst $ args) = Right $ Thunk Set.empty (Map.union (Map.fromList args) thunkEnv) thunkBody
+                                                         | otherwise                                       = Left [TypeError i (Thunk thunkNeeded thunkEnv thunkBody) $ "Wrong args " `T.append` (T.pack . show . fmap fst $ args) `T.append` " for " `T.append` n]
 
 
 frameArg :: Builtin
@@ -318,7 +325,7 @@ builtins :: [Builtin]
 builtins = [ event, construct
            , plus, minus, numberCompare
            , listAppend, listAdd, listConcat, listEmpty, listMap, listFilter, listReduce, listLength, listSum
-           , numberToText
+           , numberToText, instantToText
            , suspensionFrameList, frameArg, frameResult
            , htmlText, htmlButton, htmlTextInput, htmlElementEvents, instantCompare
            ]
@@ -329,6 +336,12 @@ makeCompareResult env c = unionVal env (CodeDbId . con $ c) (Primitive . Prim.Te
         con EQ = "builtin-compareResult-compareResult_equal"
         con GT = "builtin-compareResult-compareResult_1_greater"
 
+makeJustResult :: BuiltinEnv -> BuiltinVal -> BuiltinVal
+makeJustResult env val = unionVal env (CodeDbId "builtin-maybeResult-maybeResult_just") val
+
+makeNothingResult :: BuiltinEnv -> BuiltinVal
+makeNothingResult env = unionVal env (CodeDbId "builtin-maybeResult-maybeResult_nothing") (Primitive . Prim.Text . T.pack $ "")
+
 data BuiltinUnion = BuiltinUnion Name [Name]
 
 htmlEventDetails :: BuiltinUnion
@@ -337,9 +350,12 @@ htmlEventDetails = BuiltinUnion "htmlEventDetails" ["htmlEventDetails_textChange
 compareResult :: BuiltinUnion
 compareResult = BuiltinUnion "compareResult" ["compareResult_1_greater", "compareResult_1_smaller", "compareResult_equal"]
 
+maybeResult :: BuiltinUnion
+maybeResult = BuiltinUnion "maybeResult" ["maybeResult_just", "maybeResult_nothing"]
 
 builtinUnions :: [BuiltinUnion]
-builtinUnions = [ compareResult, htmlEventDetails ]
+builtinUnions = [ compareResult, maybeResult
+                , htmlEventDetails ]
 
 builtinId :: Builtin -> Id
 builtinId builtin = builtinIdFromName (builtin ^. name)

@@ -75,11 +75,6 @@ findMax = [ expBinding "main" $ lam [] $
                     ,("listReduce_base", lit . Number $ 0)
                     ,("listReduce_merge_curr", lamArgId "findMax_curr")
                     ,("listReduce_merge_next", lamArgId "findMax_next")
-{-
-                    ,("listReduce_merge", lam ["findMax_curr", "findMax_next"] $
-                                              app (var "+") 
-                                                  [("+_1", var "findMax_curr"), ("+_2", var "findMax_next")])
--}
                     ,("listReduce_merge", lam ["findMax_curr", "findMax_next"] $
                                               app (app (var "numberCompare")
                                                        [("numberCompare_1", var "findMax_next")
@@ -227,6 +222,20 @@ namedLetBindings :: Name -> [(Name, Exp)] -> Exp -> Exp
 namedLetBindings name namesExps inner = letBindings [(name, lam (map fst namesExps) inner)]
                                                     (app (var name) namesExps)
 
+
+listReduce :: Exp -> Exp -> Text -> Text -> Exp -> Exp
+listReduce list base currName nextName lamBody = app (var "listReduce")
+                                                     [("listReduce_list", list)
+                                                     ,("listReduce_base", base)
+                                                     ,("listReduce_merge_curr", lamArgId currName)
+                                                     ,("listReduce_merge_next", lamArgId nextName)
+                                                     ,("listReduce_merge", lam [currName, nextName] lamBody)
+                                                     ]
+
+maybeResult_nothing = app (var "construct") [("construct_with", lamArgId "maybeResult_nothing"), ("construct_payload", lit (Text ""))]
+
+maybeResult_just v = app (var "construct") [("construct_with", lamArgId "maybeResult_just"), ("construct_payload", v)]
+
 web :: [Binding Identity]
 web = todoWeb
 
@@ -242,15 +251,20 @@ todoWeb = [ expBinding "todoRecord" $ record ["todoRecord_id", "todoRecord_text"
                      ]
           , expBinding "savedTodos" $ lam [] $
               listConcat $ listMap (lam ["savedTodoForms_mapFrames"] $
-                               listConcat $ listMap (lam ["savedTodoForm_frame"] $ 
-                                                         listMap (lam ["event"] $
-                                                                      app (var "todoRecord")
-                                                                          [("todoRecord_id", frameArgLit (var "event") "event_instant")
-                                                                          ,("todoRecord_text", app (frameArgLit (var "event") "event_details")
-                                                                                                   [("htmlEventDetails_textChange", var "identityFunction")]
-                                                                           )
-                                                                          ])
-                                                                 (htmlElementEvents (frameResult (var "savedTodoForm_frame")))
+                               listConcat $ listMap (lam ["savedTodoForm_todoTextBoxFrame"] $
+                                                         app (app (var "lastEvent")
+                                                                  [("lastEvent_events", (htmlElementEvents (frameResult (var "savedTodoForm_todoTextBoxFrame"))))]
+                                                             )
+                                                             [("maybeResult_nothing", lam ["unused_4"] $ listOf [])
+                                                             ,("maybeResult_just", lam ["event"] $
+                                                                                 app (var "todoRecord")
+                                                                                     [("todoRecord_id", frameArgLit (var "event") "event_instant")
+                                                                                     ,("todoRecord_text", app (frameArgLit (var "event") "event_details")
+                                                                                                              [("htmlEventDetails_textChange", var "identityFunction")]
+                                                                                      )
+                                                                                     ]
+                                                              )
+                                                             ]
                                                      )
                                                      (suspensionFrameList (suspend $ suspendSpec "todoTextBox" 
                                                                                                  []
@@ -272,10 +286,95 @@ todoWeb = [ expBinding "todoRecord" $ record ["todoRecord_id", "todoRecord_text"
                       (var "savedTodos")
           , expBinding "unsavedTodoForm" $ lam [] $
               app (var "todoForm") [("todoForm_n", listLength (app (var "savedTodoWidgets") []))]
+          , expBinding "lastEvent" $ lam ["lastEvent_events"] $
+              listReduce (var "lastEvent_events")
+                         maybeResult_nothing
+                         "lastEvent_currMaybe" "lastEvent_next" $
+                             app (var "lastEvent_currMaybe")
+                                 [
+                                 ("maybeResult_just", lam ["lastEvent_curr"] $
+                                                           maybeResult_just $ app (app (var "instantCompare")
+                                                                                   [("instantCompare_1", frameArgLit (var "lastEvent_next") "event_instant")
+                                                                                   ,("instantCompare_2", frameArgLit (var "lastEvent_curr") "event_instant")
+                                                                                   ]
+                                                                              )
+                                                                              [("compareResult_1_smaller", lam ["unused_1"] $ var "lastEvent_curr")
+                                                                              ,("compareResult_1_greater", lam ["unused_2"] $ var "lastEvent_next")
+                                                                              ,("compareResult_equal", lam ["unused_3"] $ var "lastEvent_next")
+                                                                              ]
+                                  )
+                                 ]
           , expBinding "main" $ lam [] $
               listOf [ app (var "unsavedTodoForm") []
                      , app (var "savedTodoWidgets") []
                      , htmlText (numberToText (listLength (app (var "savedTodoWidgets") [])))
+                     , listMap (lam ["savedTodoForm_todoTextBoxFrameDbg1"] $
+                                   listMap (lam ["eventttt"] (listOf [(app (var "htmlText") [("htmlText_text", (lit $ Text "OHAI"))])
+                                                                     ,(app (var "htmlText") [("htmlText_text", (app (frameArgLit (var "eventttt") "event_details")
+                                                                                                                    [("htmlEventDetails_textChange", var "identityFunction")]))])
+                                                                     ,(app (var "htmlText") [("htmlText_text", (app (var "instantToText") [("instantToText_instant", (frameArgLit (var "eventttt") "event_instant"))]))])
+                                                                     ]))
+                                           (htmlElementEvents (frameResult (var "savedTodoForm_todoTextBoxFrameDbg1"))))
+                               (suspensionFrameList (suspend $ suspendSpec "todoTextBox" [] []))
+
+                     , listMap (lam ["savedTodoForm_todoTextBoxFrameDbg"] $
+                                   app (app (var "lastEvent")
+                                            [("lastEvent_events", (htmlElementEvents (frameResult (var "savedTodoForm_todoTextBoxFrameDbg"))))]
+                                       )
+                                       [("maybeResult_nothing", lam ["unused_4Dbg"] $ app (var "htmlText") [("htmlText_text", lit $ Text "NUTTIN")])
+                                       ,("maybeResult_just", lam ["eventDbg"] $
+                                                                 app (var "htmlText") 
+                                                                     [("htmlText_text", app (frameArgLit (var "eventDbg") "event_details")
+                                                                                            [("htmlEventDetails_textChange", var "identityFunction")]
+                                                               
+                                                                      )
+                                                                     ]
+                                        )
+                                       ]
+                               )
+                               (suspensionFrameList (suspend $ suspendSpec "todoTextBox" [] []))
+                     , listMap (lam ["lastEvent2_element"] $
+                                    app (var "htmlText") [("htmlText_text", app (listReduce (htmlElementEvents (frameResult (var "lastEvent2_element")))
+                                                                                            maybeResult_nothing
+                                                                                            "lastEvent2_currMaybe"
+                                                                                            "lastEvent2_next" $
+                                                                                            maybeResult_just (var "lastEvent2_next"))
+                                                                                [("maybeResult_nothing", lam ["unused6"] $ lit $ Text "NONE YET")
+                                                                                ,("maybeResult_just", lam ["lastEvent2_found"] $
+                                                                                                        app (frameArgLit (var "lastEvent2_found") "event_details") [("htmlEventDetails_textChange", var "identityFunction")])
+                                                                                ]
+                                                          )]
+                               )
+                               (suspensionFrameList (suspend $ suspendSpec "todoTextBox" [] []))
+                     , listMap (lam ["lastEvent2_dbg_frame"] $
+                                    htmlText $ app (listReduce (htmlElementEvents (frameResult (var "lastEvent2_dbg_frame")))
+                                                               maybeResult_nothing
+                                                               "lastEvent2_dbg_currMaybe"
+                                                               "lastEvent2_dbg_next" $
+                                                                   app (var "lastEvent2_dbg_currMaybe")
+                                                                       [
+                                                                       ("maybeResult_just", lam ["lastEvent2_dbg_curr"] $
+                                                                                                 maybeResult_just $ app (app (var "instantCompare")
+                                                                                                                         [("instantCompare_1", frameArgLit (var "lastEvent2_dbg_next") "event_instant")
+                                                                                                                         ,("instantCompare_2", frameArgLit (var "lastEvent2_dbg_curr") "event_instant")
+                                                                                                                         ]
+                                                                                                                    )
+                                                                                                                    [("compareResult_1_smaller", lam ["unused_8"] $ var "lastEvent2_dbg_curr")
+                                                                                                                    ,("compareResult_1_greater", lam ["unused_9"] $ var "lastEvent2_dbg_next")
+                                                                                                                    ,("compareResult_equal", lam ["unused_a"] $ var "lastEvent2_dbg_next")
+                                                                                                                    ]
+                                                                        )
+                                                                       ]
+                                                   )
+                                                   [("maybeResult_just", lam ["lastEvent2_dbg_res"] $ app (frameArgLit (var "lastEvent2_dbg_res") "event_details")
+                                                                                                          [("htmlEventDetails_textChange", var "identityFunction")])
+                                                   ,("maybeResult_nothing", lam ["lastEvent2_dbg_resb"] $ lit $ Text "OOP")
+                                                   ] 
+                               )
+                               (suspensionFrameList (suspend $ suspendSpec "todoTextBox" [] []))
+              
+
+
                      ]
           , expBinding "clickCount" $ lam ["clickCount_button"] $
              listSum $ listMap (lam ["builtin-listMap-listMap_f-elem"] $
