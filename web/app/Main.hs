@@ -29,10 +29,11 @@ import           GHCJS.Types
 
 import qualified Builtins
 import qualified Code
-import CodeDb (CodeDbId(..))
-import Prim (Prim(..))
+import CodeDb (CodeDbId(..), codeDbIdText)
 import qualified Eval
 import Eval (Val(..))
+import Lam (bindingsWithIdText, mapBindingId)
+import Prim (Prim(..))
 import qualified Run
 
 textDiv :: String -> VNode
@@ -41,10 +42,21 @@ textDiv x = E.div () [ch|c|]
     c = E.text . JSS.pack $ x
 
 
-data Event = Event { eventInstant :: [Integer], eventDetails :: EventDetails }
+type Instant = [Integer]
+
+data Event = Event { eventInstant :: Instant, eventDetails :: EventDetails }
+
 
 data EventDetails = ClickEvent | ChangeEvent Text
   deriving (Eq, Show)
+
+type AllEvents = Map (Eval.Frame CodeDbId) [Event]
+
+data Property = TextValue
+  deriving (Eq, Ord, Show)
+
+type Universe = Map (Eval.Frame CodeDbId, Property) (Val CodeDbId)
+type Universes = [(Instant, Universe)]
 
 wrapEventDetails :: Event -> Eval.Val CodeDbId
 wrapEventDetails e = case eventDetails e of
@@ -53,14 +65,22 @@ wrapEventDetails e = case eventDetails e of
   ChangeEvent t -> Builtins.unionVal Map.empty (CodeDbId "builtin-htmlEventDetails-htmlEventDetails_textChange")
                                                (Primitive $ Prim.Text t)
 
-type AllEvents = Map (Eval.Frame CodeDbId) [Event]
-
 addEvent :: Event -> Eval.Frame CodeDbId -> AllEvents -> (AllEvents,AllEvents)
 addEvent event frame allEvents = let result = addEvent' event frame allEvents
                                   in (result,result)
 
 addEvent' :: Ord k => a -> k -> Map k [a] -> Map k [a]
 addEvent' event = Map.alter (\events -> (event:) <$> (events `mappend` (Just []))) 
+
+lastUniverse :: Universes -> Universe
+lastUniverse [] = Map.empty
+lastUniverse ((_, universe):_) = universe
+
+expandUniverses :: Instant -> EventDetails -> Eval.Frame CodeDbId -> Universes -> (Universes,Universes)
+expandUniverses instant eventDetails frame universes = let r = (instant, nextUniverse eventDetails (lastUniverse universes)):universes
+                                                        in (r, r)
+  where nextUniverse ClickEvent prev = prev
+        nextUniverse (ChangeEvent text) prev = Map.insert (frame, TextValue) (Primitive $ Prim.Text text) prev
 
 inputTextFromEvent :: Ev.Event -> IO (Maybe Text)
 inputTextFromEvent ev = do let evVal = (Unsafe.Coerce.unsafeCoerce ev :: JSVal)
@@ -93,6 +113,12 @@ envFromEvents = Map.fromList . map envFromEvent . Map.assocs
                              ,(CodeDbId "builtin-event-event_details", wrapEventDetails event)
                              ]
 
+envFromUniverses :: Universes -> Map CodeDbId (Val CodeDbId)
+envFromUniverses = Map.unions . fmap envFromUniverse 
+  where envFromUniverse (instant, universe) = Map.fromList . map (envFromProp instant) . Map.assocs $ universe
+        envFromProp instant ((frame, property), value) = (CodeDbId $ "props-" `T.append` (T.pack . show $ frame) `T.append` "-" `T.append` (T.pack . show $ instant) `T.append` "-" `T.append` (T.pack . show $ property), value)
+
+
 newInstant :: UTCTime -> Set [Integer] -> (Set [Integer], [Integer])
 newInstant time instants = (Set.insert free instants, free)
   where
@@ -106,11 +132,14 @@ newInstant time instants = (Set.insert free instants, free)
 
 runWeb :: VMount -> IO ()
 runWeb mountPoint = do (bindingsWithIds, _) <- Run.projectCode Code.web
+                       putStrLn $ T.unpack $ bindingsWithIdText (mapBindingId codeDbIdText <$> bindingsWithIds)
                        events <- IORef.newIORef Map.empty
+                       universes <- IORef.newIORef []
                        instants <- IORef.newIORef Set.empty
                        let rerender frame eventDetails = do id <- getCurrentTime >>= \time -> IORef.atomicModifyIORef instants (newInstant time)
                                                             currentEvents <- IORef.atomicModifyIORef events (addEvent (Event id eventDetails) frame)
-                                                            render rerender mountPoint $ Run.runProjectionWithEnv bindingsWithIds (envFromEvents currentEvents)
+                                                            currentUniverses <- IORef.atomicModifyIORef universes (expandUniverses id eventDetails frame)
+                                                            render rerender mountPoint $ Run.runProjectionWithEnv bindingsWithIds (envFromEvents currentEvents `Map.union` envFromUniverses currentUniverses)
                        render rerender mountPoint $ Run.runProjectionWithEnv bindingsWithIds Map.empty
 
 renderErrors :: [Run.Error] -> VNode
@@ -121,6 +150,11 @@ renderError (Run.RuntimeError (Eval.TypeError i val message)) = E.div ([] :: [A.
   [ E.h1 ([] :: [A.Attribute]) $ E.text . JSS.pack $ "Type Error at " ++ show i ++ T.unpack message
   , E.pre ([] :: [A.Attribute]) $ E.text . JSS.pack . Eval.pprintVal $ val
   ]
+renderError (Run.RuntimeError (Eval.UndefinedMember i frame message)) = E.div ([] :: [A.Attribute])
+  [ E.h1 ([] :: [A.Attribute]) $ E.text . JSS.pack $ "Undefined member at " ++ show i ++ T.unpack message
+  , E.pre ([] :: [A.Attribute]) $ E.text . JSS.pack . Eval.pprintVal . Eval.ValFrame $ frame
+  ]
+
 renderError e = textDiv $ show e
 
 render :: (Eval.Frame CodeDbId -> EventDetails -> IO ()) -> VMount -> Either [Run.Error] (Val CodeDbId) -> IO ()

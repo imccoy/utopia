@@ -59,6 +59,9 @@ get i argId env = case Map.lookup (CodeDbId argId) env of
 getList :: CodeDbId -> T.Text -> BuiltinEnv -> Either [EvalError CodeDbId] [BuiltinVal]
 getList i argId env = get i argId env >>= asList i
 
+getListOf :: CodeDbId -> T.Text -> BuiltinEnv -> (CodeDbId -> BuiltinVal -> Either [EvalError CodeDbId] a) -> Either [EvalError CodeDbId] [a]
+getListOf i argId env f = (fmap (f i) <$> getList i argId env) >>= eitherList
+
 asList :: i -> Val i -> Either [EvalError i] [Val i]
 asList i v = case v of
   (ValList list) -> pure list 
@@ -89,14 +92,24 @@ asNumber i v = case v of
                  (Prim.Number num) -> pure num
                  p -> Left [TypeError i (Primitive p) " is not a number"]
 
+asValNumber :: i -> Val i -> Either [EvalError i] Integer
+asValNumber i v = asPrim i v >>= asNumber i
+
 getNumber :: CodeDbId -> T.Text -> BuiltinEnv -> Either [EvalError CodeDbId] Integer
 getNumber i argId env = getPrim i argId env >>= asNumber i
 
 getText :: CodeDbId -> T.Text -> BuiltinEnv -> Either [EvalError CodeDbId] T.Text
-getText i argId env = getPrim i argId env >>= \v ->
-  case v of
-    (Prim.Text text) -> pure text
-    p -> Left [TypeError i (Primitive p) " is not text"]
+getText i argId env = getPrim i argId env >>= asText i
+
+asValText :: i -> Val i -> Either [EvalError i] T.Text
+asValText i v = asPrim i v >>= asText i
+
+
+
+asText :: i -> Prim.Prim -> Either [EvalError i] T.Text
+asText i v = case v of
+                 (Prim.Text t) -> pure t
+                 p -> Left [TypeError i (Primitive p) " is not text"]
 
 
 
@@ -117,7 +130,7 @@ instantToText :: Builtin
 instantToText = Builtin "instantToText" ["instantToText_instant"] . FnBody $ \i e _ -> do
   instantPieces <- getList i "builtin-instantToText-instantToText_instant" e
   case instantPieces of
-    [a,b,c,d] -> pure $ Primitive $ Prim.Text $ T.pack $ show instantPieces
+    [_,_,_,_] -> pure $ Primitive $ Prim.Text $ T.pack $ show instantPieces
     _ -> Left [TypeError i (ValList $ instantPieces) "is not an instant"]
 
 
@@ -232,7 +245,7 @@ frameArg :: Builtin
 frameArg = Builtin "frameArg" ["frameArg_frame", "frameArg_arg"] . ResolvedFnBody $ \_ i e _ _ -> do
   frame <- getFrame i "builtin-frameArg-frameArg_frame" e
   (Suspension argId _ _) <- getSuspension i "builtin-frameArg-frameArg_arg" e
-  maybe (Left [UndefinedVar i (codeDbIdText argId)]) (Right . noTrail) $ Map.lookup argId (frame ^. Eval.frameEnv)
+  maybe (Left [UndefinedMember i frame (codeDbIdText argId)]) (Right . noTrail) $ Map.lookup argId (frame ^. Eval.frameEnv)
 
 htmlElementEvents :: Builtin
 htmlElementEvents = Builtin "htmlElementEvents" ["htmlElementEvents_element"] . ResolvedFnBody $ \_ i e g _ -> do
@@ -257,6 +270,19 @@ htmlText :: Builtin
 htmlText = Builtin "htmlText" ["htmlText_text"] . FnBody $ \i e _ -> do
   text <- getText i "builtin-htmlText-htmlText_text" e
   pure $ ValList [Primitive $ Prim.Text "text", Primitive $ Prim.Text text]
+
+htmlTextInputValue :: Builtin
+htmlTextInputValue = Builtin "htmlTextInputValue" ["htmlTextInputValue_htmlInput", "htmlTextInputValue_instant"] . ResolvedFnBody $ \_ i e g _ -> do
+  frame <- getList i "builtin-htmlTextInputValue-htmlTextInputValue_htmlInput" e >>= \case
+             [Primitive (Prim.Text "textInput"), ValFrame f] -> Right f
+             fields -> Left [TypeError i (ValList fields) $ " is not a text input"]
+  instant <- getListOf i "builtin-htmlTextInputValue-htmlTextInputValue_instant" e asValNumber
+
+  let val = Eval.lookupVarByResolvedId e g (CodeDbId $ "props-" `T.append` (T.pack . show $ frame) `T.append` "-" `T.append` (T.pack . show $ instant) `T.append` "-TextValue")
+  case val of
+    Just v -> pure . Primitive . Prim.Text <$> (asValText i $ v)
+    Nothing -> pure . pure . Primitive . Prim.Text $ ""
+
 
 htmlButton :: Builtin
 htmlButton = Builtin "htmlButton" ["htmlButton_text"] . ResolvedFnBody $ \frame i e _ _ -> do
@@ -327,7 +353,7 @@ builtins = [ event, construct
            , listAppend, listAdd, listConcat, listEmpty, listMap, listFilter, listReduce, listLength, listSum
            , numberToText, instantToText
            , suspensionFrameList, frameArg, frameResult
-           , htmlText, htmlButton, htmlTextInput, htmlElementEvents, instantCompare
+           , htmlText, htmlButton, htmlTextInput, htmlTextInputValue, htmlElementEvents, instantCompare
            ]
 
 makeCompareResult :: BuiltinEnv -> Ordering -> BuiltinVal
@@ -335,12 +361,6 @@ makeCompareResult env c = unionVal env (CodeDbId . con $ c) (Primitive . Prim.Te
   where con LT = "builtin-compareResult-compareResult_1_smaller"
         con EQ = "builtin-compareResult-compareResult_equal"
         con GT = "builtin-compareResult-compareResult_1_greater"
-
-makeJustResult :: BuiltinEnv -> BuiltinVal -> BuiltinVal
-makeJustResult env val = unionVal env (CodeDbId "builtin-maybeResult-maybeResult_just") val
-
-makeNothingResult :: BuiltinEnv -> BuiltinVal
-makeNothingResult env = unionVal env (CodeDbId "builtin-maybeResult-maybeResult_nothing") (Primitive . Prim.Text . T.pack $ "")
 
 data BuiltinUnion = BuiltinUnion Name [Name]
 

@@ -9,6 +9,7 @@ import Data.Functor.Foldable.Extended
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Maybe (catMaybes)
+import Data.Monoid ((<>))
 import Data.Set (Set)
 import qualified Data.Set as Set
 import qualified Data.Text as T
@@ -306,6 +307,41 @@ resolveExpVars globalNames expr = go Map.empty expr
     lookupArgName id argName = case Map.lookup argName (globalNamesArgs globalNames) of
                                  Just targetId -> Right $ Map.singleton id targetId
                                  Nothing -> Left $ MonoidMap $ Map.singleton argName (Set.singleton id)
+
+bindingsWithIdText :: [BindingWithId T.Text] -> T.Text
+bindingsWithIdText = T.unlines . map bindingWithIdText
+  where bindingWithIdText (Id.WithId id (Identity (Binding name bound))) = "Binding " <> id <> " " <> name <> "\n" <> indent (bindingText bound)
+        bindingText (BindingExp exp) = expText exp
+        bindingText (BindingTypeish typeish) = typeishText typeish
+        expText (Fix (ExpW (Id.WithId id (Identity expBody)))) = lamTopCon expBody <> "@" <> id <> " " <> expBodyText expBody
+        expBodyText (LamF names body) = namesText names <> "\n" <> indent (expText body)
+        expBodyText (AppF fn args) = "(\n" <> indent (expText fn) <> "\n" <> ")\n" <>
+                                     argsText args <> "\n"
+        expBodyText (RecordF names) = namesText names
+        expBodyText (VarF name) = name
+        expBodyText (SuspendF spec) = suspendSpecText spec
+        expBodyText (LamArgIdF name) = name
+        expBodyText (LitF literal) = T.pack $ show literal
+        argsText args = "[" <> (T.intercalate "\n," [name <> "@" <> id <> ": \n" <> indent (expText exp) | (Id.WithId id (Identity name), exp) <- args]) <> "\n]"
+        suspendSpecText (SuspendSpec (Id.WithId id (Identity name)) args parents) = name <> "@" <> id <> "\n" <>
+                                                                                    argsText args <>
+                                                                                    "[\n" <>
+                                                                                    T.intercalate "\n," (indent . suspendSpecText <$> parents) <>
+                                                                                    "\n]"
+        namesText names = "[" <> T.intercalate ", " [name <> "@" <> id | (Id.WithId id (Identity name)) <- names] <> "]"
+        typeishText _ = ""
+        indent = T.unlines . map ("  " <>) . T.lines
+
+lamTopCon :: ExpF w e -> T.Text
+lamTopCon (Lam.LamF _ _) = "LamF"
+lamTopCon (Lam.AppF _ _) = "AppF"
+lamTopCon (Lam.VarF _) = "VarF"
+lamTopCon (Lam.SuspendF _) = "SuspendF"
+lamTopCon (Lam.LamArgIdF _) = "LamArgIdF"
+lamTopCon (Lam.LitF _) = "LitF"
+lamTopCon (Lam.RecordF _) = "RecordF"
+
+
 
 bindingDiffTree :: BindingWithId T.Text -> DiffTree
 bindingDiffTree (Id.WithId id (Identity (Binding name contents))) = bindingContentsDiffTree id name contents

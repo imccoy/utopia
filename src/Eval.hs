@@ -20,7 +20,7 @@ flattenBinding :: BindingWithId i -> Maybe (i, i, Lam.Name, ExpWithId i)
 flattenBinding binding = flip fmap (Lam.bindingExp binding) $ \exp -> 
     (binding ^. Id.id, Lam.expTopId exp, Lam.bindingName binding, exp)
 
-data EvalError i = UndefinedVar i T.Text | TypeError i (Val i) T.Text
+data EvalError i = UndefinedVar i T.Text | UndefinedMember i (Frame i) T.Text | TypeError i (Val i) T.Text
   deriving (Eq, Ord, Show)
 
 type ThunkWithId i = Id.WithId i Identity (Thunk i)
@@ -213,16 +213,6 @@ evalVal resolved globalEnv parentFrames env trail (Thunk thunkArgs thunkEnv thun
           else Right $ noTrail $ Thunk thunkArgs thunkEnv' thunk
        
 evalVal _ _ _ _ _ v = Right $ noTrail v
-
-lamTopCon :: Lam.ExpF w e -> T.Text
-lamTopCon (Lam.LamF _ _) = "LamF"
-lamTopCon (Lam.AppF _ _) = "AppF"
-lamTopCon (Lam.VarF _) = "VarF"
-lamTopCon (Lam.SuspendF _) = "SuspendF"
-lamTopCon (Lam.LamArgIdF _) = "LamArgIdF"
-lamTopCon (Lam.LitF _) = "LitF"
-lamTopCon (Lam.RecordF _) = "RecordF"
-
 
 evalThunk :: (Show i, Ord i)
           => Lam.Resolved i
