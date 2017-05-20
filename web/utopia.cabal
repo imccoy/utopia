@@ -14,7 +14,7 @@ cabal-version:       >=1.10
 
 library
   hs-source-dirs:      ../src
-  exposed-modules:     Code, CodeDb, CodeTree, Diff, DiffTree, Eval, Id, Lam, Builtins, Run, Prim
+  exposed-modules:     Builtins, Code, CodeDb, CodeTree, Diff, DiffTree, Eval, Id, Lam, Parser, Primitives, Run
   other-modules:       Data.Functor.Foldable.Extended
   default-extensions:  DeriveFunctor,
                        DeriveTraversable,
@@ -34,6 +34,7 @@ library
                        edit-distance,
                        either,
                        lens,
+                       megaparsec,
                        mtl,
                        random,
                        recursion-schemes,
@@ -53,6 +54,8 @@ test-suite test
                        RecordWildCards
   build-depends:       base,
                        lens,
+                       mtl,
+                       random,
                        tasty,
                        tasty-hunit,
                        text,

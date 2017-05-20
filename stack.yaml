@@ -15,6 +15,7 @@ packages:
 extra-deps:
   - recursion-schemes-5.0.1
   - base-orphans-0.5.4
+  - megaparsec-5.2.0
 
 # Override default flag values for local packages and extra-deps
 flags: {}

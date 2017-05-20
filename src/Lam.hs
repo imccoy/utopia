@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveTraversable, ScopedTypeVariables, FlexibleContexts, UndecidableInstances #-}
+{-# LANGUAGE FlexibleInstances, InstanceSigs, DeriveTraversable, ScopedTypeVariables, TypeOperators, FlexibleContexts, UndecidableInstances #-}
 module Lam where
 
 import Prelude hiding (exp, id)
@@ -21,12 +21,13 @@ import MonoidMap (MonoidMap(..))
 type Name = T.Text
 
 data Literal = Number Integer | Text T.Text
-  deriving (Show)
+  deriving (Show, Eq)
 
 data SuspendSpec w e = SuspendSpec (w Name) [(w Name, e)] [SuspendSpec w e]
   deriving (Functor, Prelude.Foldable, Traversable)
 
-deriving instance (Show e, Show (w e), Show (w Name)) => Show (SuspendSpec w e)
+deriving instance (Show e, Show (w Name)) => Show (SuspendSpec w e)
+deriving instance (Eq e, Eq (w Name)) => Eq (SuspendSpec w e)
 
 data ExpF w e = LamF [w Name] e
               | AppF e [(w Name, e)]
@@ -38,6 +39,8 @@ data ExpF w e = LamF [w Name] e
   deriving (Functor, Prelude.Foldable, Traversable)
 
 deriving instance (Show e, Show (w e), Show (w Name)) => Show (ExpF w e)
+deriving instance (Eq e, Eq (w e), Eq (w Name)) => Eq (ExpF w e)
+
 
 data Binding w = Binding Name (BindingContents w)
 
@@ -54,12 +57,10 @@ deriving instance (Show (w Name)) => Show (Typeish w)
 
 newtype ExpW w e = ExpW (w (ExpF w e))
   deriving (Functor, Prelude.Foldable, Traversable)
+
 type Exp = Fix (ExpW Identity)
 
 
-deriving instance (Eq (w e), Eq (w (ExpF w e))) => Eq (ExpW w e)
-
-deriving instance (Show (w (ExpF w e))) => Show (ExpW w e)
 
 expBinding :: T.Text -> Exp -> Binding Identity
 expBinding name exp = Binding name $ BindingExp exp
@@ -80,6 +81,14 @@ suspendSpec :: Name -> [(T.Text, Exp)] -> [SuspendSpec Identity Exp] -> SuspendS
 suspendSpec suspendedName args parents = SuspendSpec (pure suspendedName)
                                                      (traverse . _1 %~ (\argName -> pure argName) $ args) 
                                                      parents
+
+suspendSpecWithArg :: SuspendSpec Identity Exp -> (T.Text, Exp) -> SuspendSpec Identity Exp
+suspendSpecWithArg (SuspendSpec name args parents) arg = SuspendSpec name ((_1 %~ pure $ arg):args) parents
+
+suspendSpecWithParent :: SuspendSpec Identity Exp -> SuspendSpec Identity Exp -> SuspendSpec Identity Exp
+suspendSpecWithParent (SuspendSpec name args parents) parent = SuspendSpec name args (parent:parents)
+
+
 
 suspend :: SuspendSpec Identity Exp -> Exp
 suspend = Fix . ExpW . pure . SuspendF

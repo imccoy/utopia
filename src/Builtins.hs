@@ -18,7 +18,7 @@ import Eval (Env, Val(..), EvalError(..), Thunk(..), Trail, Trailing, noTrail, S
 import qualified Eval as Eval
 import CodeDb (CodeDbId (..), codeDbIdText)
 import qualified Lam
-import qualified Prim
+import qualified Primitives
 
 type Name = T.Text
 type ArgName = T.Text
@@ -73,8 +73,8 @@ getSuspension i argId env = get i argId env >>= \v ->
     (ValSuspension suspension) -> Right suspension
     _ -> Left [TypeError i v " is not a suspension"]
 
-getPrim :: CodeDbId -> T.Text -> BuiltinEnv -> Either [EvalError CodeDbId] Prim.Prim
-getPrim i argId env = get i argId env >>= asPrim i
+getPrimitives :: CodeDbId -> T.Text -> BuiltinEnv -> Either [EvalError CodeDbId] Primitives.Prim
+getPrimitives i argId env = get i argId env >>= asPrimitives i
 
 getFrame :: CodeDbId -> T.Text -> BuiltinEnv -> Either [EvalError CodeDbId] (Frame CodeDbId)
 getFrame i argId env = get i argId env >>= \v ->
@@ -82,33 +82,33 @@ getFrame i argId env = get i argId env >>= \v ->
     ValFrame frame -> Right frame
     _ -> Left [TypeError i  v "is not a frame"]
 
-asPrim :: i -> Val i -> Either [EvalError i] Prim.Prim
-asPrim i v = case v of
+asPrimitives :: i -> Val i -> Either [EvalError i] Primitives.Prim
+asPrimitives i v = case v of
   Primitive p -> Right p
   _ -> Left [TypeError i v "is not a prim"]
 
-asNumber :: i -> Prim.Prim -> Either [EvalError i] Integer
+asNumber :: i -> Primitives.Prim -> Either [EvalError i] Integer
 asNumber i v = case v of
-                 (Prim.Number num) -> pure num
+                 (Primitives.Number num) -> pure num
                  p -> Left [TypeError i (Primitive p) " is not a number"]
 
 asValNumber :: i -> Val i -> Either [EvalError i] Integer
-asValNumber i v = asPrim i v >>= asNumber i
+asValNumber i v = asPrimitives i v >>= asNumber i
 
 getNumber :: CodeDbId -> T.Text -> BuiltinEnv -> Either [EvalError CodeDbId] Integer
-getNumber i argId env = getPrim i argId env >>= asNumber i
+getNumber i argId env = getPrimitives i argId env >>= asNumber i
 
 getText :: CodeDbId -> T.Text -> BuiltinEnv -> Either [EvalError CodeDbId] T.Text
-getText i argId env = getPrim i argId env >>= asText i
+getText i argId env = getPrimitives i argId env >>= asText i
 
 asValText :: i -> Val i -> Either [EvalError i] T.Text
-asValText i v = asPrim i v >>= asText i
+asValText i v = asPrimitives i v >>= asText i
 
 
 
-asText :: i -> Prim.Prim -> Either [EvalError i] T.Text
+asText :: i -> Primitives.Prim -> Either [EvalError i] T.Text
 asText i v = case v of
-                 (Prim.Text t) -> pure t
+                 (Primitives.Text t) -> pure t
                  p -> Left [TypeError i (Primitive p) " is not text"]
 
 
@@ -124,13 +124,13 @@ getThunkable i argId env = get i argId env >>= \v ->
 numberToText :: Builtin
 numberToText = Builtin "numberToText" ["numberToText_number"] . FnBody $ \i e _ -> do
   n <- getNumber i "builtin-numberToText-numberToText_number" e
-  pure $ Primitive $ Prim.Text $ T.pack $ show n
+  pure $ Primitive $ Primitives.Text $ T.pack $ show n
 
 instantToText :: Builtin
 instantToText = Builtin "instantToText" ["instantToText_instant"] . FnBody $ \i e _ -> do
   instantPieces <- getList i "builtin-instantToText-instantToText_instant" e
   case instantPieces of
-    [_,_,_,_] -> pure $ Primitive $ Prim.Text $ T.pack $ show instantPieces
+    [_,_,_,_] -> pure $ Primitive $ Primitives.Text $ T.pack $ show instantPieces
     _ -> Left [TypeError i (ValList $ instantPieces) "is not an instant"]
 
 
@@ -147,13 +147,13 @@ plus :: Builtin
 plus = Builtin "+" ["+_1", "+_2"] . FnBody $ \i e _ -> do
   n <- getNumber i "builtin-+-+_1" e
   m <- getNumber i "builtin-+-+_2" e
-  pure $ Primitive $ Prim.Number $ n + m
+  pure $ Primitive $ Primitives.Number $ n + m
 
 minus :: Builtin
 minus = Builtin "-" ["-_1", "-_2"] . FnBody $ \i e _ -> do
   n <- getNumber i "builtin----_1" e
   m <- getNumber i "builtin----_2" e
-  pure $ Primitive $ Prim.Number $ n - m
+  pure $ Primitive $ Primitives.Number $ n - m
 
 numberCompare :: Builtin
 numberCompare = Builtin "numberCompare" ["numberCompare_1", "numberCompare_2"] . FnBody $ \i e _ -> do
@@ -205,7 +205,7 @@ listFilter = Builtin "listFilter" ["listFilter_f", "listFilter_list"] . EvalFnBo
                  [] -> Left [TypeError i (Thunk thunkNeeded thunkEnv thunkBody) "No arg for listFilter_f"]
                  _ -> Left [TypeError i (Thunk thunkNeeded thunkEnv thunkBody) "Too many args for listFilter_f"]
   ts <- sequenceA <$> mapM eval thunks
-  let matchListVs vs = zipWith (\l v -> if v == Primitive (Prim.Number 0) then Nothing else Just l) list vs
+  let matchListVs vs = zipWith (\l v -> if v == Primitive (Primitives.Number 0) then Nothing else Just l) list vs
   let trail_filtered = (\vs -> catMaybes . matchListVs $ vs) <$> ts
   pure $ ValList <$> trail_filtered
 
@@ -217,13 +217,13 @@ listEmpty = Builtin "listEmpty" [] . FnBody $ \_ _ _ -> do
 listLength :: Builtin
 listLength = Builtin "listLength" ["listLength_list"] . FnBody $ \i e _ -> do
   list <- getList i "builtin-listLength-listLength_list" e
-  pure $ Primitive $ Prim.Number $ fromIntegral $ length list
+  pure $ Primitive $ Primitives.Number $ fromIntegral $ length list
 
 listSum :: Builtin
 listSum = Builtin "listSum" ["listSum_list"] . FnBody $ \i e _ -> do
   list <- getList i "builtin-listSum-listSum_list" e
-  case partitionEithers ((asPrim i >=> asNumber i) <$> list) of
-    ([], ints) -> pure $ Primitive $ Prim.Number $ fromIntegral $ sum ints
+  case partitionEithers ((asPrimitives i >=> asNumber i) <$> list) of
+    ([], ints) -> pure $ Primitive $ Primitives.Number $ fromIntegral $ sum ints
     (errs, _) -> Left $ concat errs
 
 listReduce :: Builtin
@@ -254,8 +254,8 @@ htmlElementEvents = Builtin "htmlElementEvents" ["htmlElementEvents_element"] . 
                               Nothing -> Right . noTrail . ValList $ []
                               Just v -> Left [TypeError i v $ "non-events at " `T.append` (T.pack . show $ frame)]
   getList i "builtin-htmlElementEvents-htmlElementEvents_element" e >>= \case
-    [Primitive (Prim.Text "button"), _, ValFrame frame] -> eventsByToken frame
-    [Primitive (Prim.Text "textInput"), ValFrame frame] -> eventsByToken frame
+    [Primitive (Primitives.Text "button"), _, ValFrame frame] -> eventsByToken frame
+    [Primitive (Primitives.Text "textInput"), ValFrame frame] -> eventsByToken frame
     fields -> Left [TypeError i (ValList fields) $ " is not an element with events"]
 
 
@@ -269,29 +269,29 @@ instantCompare = Builtin "instantCompare" ["instantCompare_1", "instantCompare_2
 htmlText :: Builtin
 htmlText = Builtin "htmlText" ["htmlText_text"] . FnBody $ \i e _ -> do
   text <- getText i "builtin-htmlText-htmlText_text" e
-  pure $ ValList [Primitive $ Prim.Text "text", Primitive $ Prim.Text text]
+  pure $ ValList [Primitive $ Primitives.Text "text", Primitive $ Primitives.Text text]
 
 htmlTextInputValue :: Builtin
 htmlTextInputValue = Builtin "htmlTextInputValue" ["htmlTextInputValue_htmlInput", "htmlTextInputValue_instant"] . ResolvedFnBody $ \_ i e g _ -> do
   frame <- getList i "builtin-htmlTextInputValue-htmlTextInputValue_htmlInput" e >>= \case
-             [Primitive (Prim.Text "textInput"), ValFrame f] -> Right f
+             [Primitive (Primitives.Text "textInput"), ValFrame f] -> Right f
              fields -> Left [TypeError i (ValList fields) $ " is not a text input"]
   instant <- getListOf i "builtin-htmlTextInputValue-htmlTextInputValue_instant" e asValNumber
 
   let val = Eval.lookupVarByResolvedId e g (CodeDbId $ "props-" `T.append` (T.pack . show $ frame) `T.append` "-" `T.append` (T.pack . show $ instant) `T.append` "-TextValue")
   case val of
-    Just v -> pure . Primitive . Prim.Text <$> (asValText i $ v)
-    Nothing -> pure . pure . Primitive . Prim.Text $ ""
+    Just v -> pure . Primitive . Primitives.Text <$> (asValText i $ v)
+    Nothing -> pure . pure . Primitive . Primitives.Text $ ""
 
 
 htmlButton :: Builtin
 htmlButton = Builtin "htmlButton" ["htmlButton_text"] . ResolvedFnBody $ \frame i e _ _ -> do
   text <- getText i "builtin-htmlButton-htmlButton_text" e
-  pure $ noTrail $ ValList [Primitive $ Prim.Text "button", Primitive $ Prim.Text text, ValFrame frame]
+  pure $ noTrail $ ValList [Primitive $ Primitives.Text "button", Primitive $ Primitives.Text text, ValFrame frame]
 
 htmlTextInput :: Builtin
 htmlTextInput = Builtin "htmlTextInput" [] . ResolvedFnBody $ \frame _ _ _ _ -> do
-  pure $ noTrail $ ValList [Primitive $ Prim.Text "textInput", ValFrame frame]
+  pure $ noTrail $ ValList [Primitive $ Primitives.Text "textInput", ValFrame frame]
 
 
 suspensionFrameList :: Builtin
@@ -357,7 +357,7 @@ builtins = [ event, construct
            ]
 
 makeCompareResult :: BuiltinEnv -> Ordering -> BuiltinVal
-makeCompareResult env c = unionVal env (CodeDbId . con $ c) (Primitive . Prim.Text . T.pack . show $ c)
+makeCompareResult env c = unionVal env (CodeDbId . con $ c) (Primitive . Primitives.Text . T.pack . show $ c)
   where con LT = "builtin-compareResult-compareResult_1_smaller"
         con EQ = "builtin-compareResult-compareResult_equal"
         con GT = "builtin-compareResult-compareResult_1_greater"

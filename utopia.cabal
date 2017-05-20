@@ -14,8 +14,8 @@ cabal-version:       >=1.10
 
 library
   hs-source-dirs:      src
-  exposed-modules:     Code, CodeDb, CodeTree, Diff, DiffTree, Eval, Id, Lam, Builtins
-  other-modules:       Data.Functor.Foldable.Extended, MonoidMap, Prim
+  exposed-modules:     Builtins, Code, CodeDb, CodeDbIdGen, CodeTree, Data.Functor.Foldable.Extended, Diff, DiffTree, Eval, Id, Lam, Parser, Primitives, Run
+  other-modules:       MonoidMap
   default-extensions:  DeriveFunctor,
                        DeriveTraversable,
                        FunctionalDependencies,
@@ -29,10 +29,14 @@ library
                        TupleSections
   default-language:    Haskell2010
   build-depends:       base >=4.8 && <4.9,
+                       constraints,
                        containers,
                        edit-distance,
                        either,
                        lens,
+                       megaparsec,
+                       mtl,
+                       random,
                        recursion-schemes,
                        safe,
                        text,
@@ -49,10 +53,16 @@ test-suite test
                        RankNTypes,
                        RecordWildCards
   build-depends:       base,
+                       constraints,
                        lens,
+                       megaparsec,
+                       mtl,
+                       random,
+                       recursion-schemes,
                        tasty,
                        tasty-hunit,
                        text,
+                       transformers,
                        utopia
   ghc-options:         -Wall
 

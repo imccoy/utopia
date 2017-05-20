@@ -14,7 +14,7 @@ import Data.Functor.Foldable.Extended
 import qualified Id
 import qualified Lam
 import Lam (BindingWithId, ExpWithId)
-import qualified Prim
+import qualified Primitives
 
 flattenBinding :: BindingWithId i -> Maybe (i, i, Lam.Name, ExpWithId i)
 flattenBinding binding = flip fmap (Lam.bindingExp binding) $ \exp -> 
@@ -28,7 +28,7 @@ type ThunkWithId i = Id.WithId i Identity (Thunk i)
 data Suspension i = Suspension i (Map i (Val i)) [Suspension i]
   deriving (Eq, Ord, Show)
 
-data Val i = Primitive Prim.Prim
+data Val i = Primitive Primitives.Prim
            | Thunk (Set i) (Env i) (ThunkWithId i)
            | ValSuspension (Suspension i)
            | ValFrame (Frame i)
@@ -172,8 +172,8 @@ eval resolved globalEnv parentFrames env trail (Fix (Lam.ExpW (Id.WithId id (Ide
                                                               -- noTrail . dropTrail is pretty weird! But since we're evaluating things to specify a suspension, we're kind of not in the real world maybe? Perhaps these shouldn't be expressions in their own right, but references to expressions in the tree that are fully legit? That way there wouldn't be this weird case where expressions don't leave a trail. We don't have a good 'syntax' for referring to expressions like that though.
                                  in noTrail . ValSuspension <$> evalSuspension suspendSpec
 
-    Lam.LitF (Lam.Number n) -> pure $ noTrail $ Primitive $ Prim.Number n
-    Lam.LitF (Lam.Text n) -> pure $ noTrail $ Primitive $ Prim.Text n
+    Lam.LitF (Lam.Number n) -> pure $ noTrail $ Primitive $ Primitives.Number n
+    Lam.LitF (Lam.Text n) -> pure $ noTrail $ Primitive $ Primitives.Text n
 
 evalArgs :: (Ord i, Show i)
          => Lam.Resolved i

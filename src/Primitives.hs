@@ -1,4 +1,4 @@
-module Prim where
+module Primitives where
 
 import qualified Data.Text as T
 

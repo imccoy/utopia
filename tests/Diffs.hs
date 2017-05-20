@@ -37,8 +37,8 @@ tests = testGroup "DiffTree"
                 , DiffTree "v2a" "Lit" (Just "2") []
                 ]
           diffResult = Diff.diff v1 v2
-       in do (Just ("v2b", Just "v1b")) `compare` mappingIdsAt diffResult [0] @?= EQ
-             (Just ("v2a", Just "v1a")) `compare` mappingIdsAt diffResult [1] @?= EQ
+       in do (Just ("v2b", Just "v1b")) @?= mappingIdsAt diffResult [0]
+             (Just ("v2a", Just "v1a")) @?= mappingIdsAt diffResult [1] 
   , testCase "simple value swap" $
       let v1 = DiffTree "M" "Module" Nothing $
                 [ DiffTree "v1a" "Binding" (Just "Frederick") $
@@ -53,10 +53,10 @@ tests = testGroup "DiffTree"
                   [ DiffTree "v2a.value" "Lit" (Just "Aye Aye, cap'n") [] ]
                 ]
           diffResult = Diff.diff v1 v2
-       in do (Just ("v2a", Just "v1a")) `compare` mappingIdsAt diffResult [0] @?= EQ
-             (Just ("v2b.value", Just "v1b.value")) `compare` mappingIdsAt diffResult [0,0] @?= EQ
-             (Just ("v2b", Just "v1b")) `compare` mappingIdsAt diffResult [1] @?= EQ
-             (Just ("v2a.value", Just "v1a.value")) `compare` mappingIdsAt diffResult [1,0] @?= EQ
+       in do (Just ("v2a", Just "v1a")) @?= mappingIdsAt diffResult [0] 
+             (Just ("v2b.value", Just "v1b.value")) @?= mappingIdsAt diffResult [0,0] 
+             (Just ("v2b", Just "v1b")) @?= mappingIdsAt diffResult [1] 
+             (Just ("v2a.value", Just "v1a.value")) @?= mappingIdsAt diffResult [1,0] 
   , testCase "ordering change with value change" $
       let v1 = DiffTree "M" "Module" Nothing $
                 [ DiffTree "v1a" "Lit" (Just "mate") []
@@ -67,8 +67,8 @@ tests = testGroup "DiffTree"
                 , DiffTree "v2a" "Lit" (Just "mute") [] -- should map to mate, aka v1a
                 ]
           diffResult = Diff.diff v1 v2
-       in do (Just ("v2b", Just "v1b")) `compare` mappingIdsAt diffResult [0] @?= EQ
-             (Just ("v2a", Just "v1a")) `compare` mappingIdsAt diffResult [1] @?= EQ
+       in do (Just ("v2b", Just "v1b")) @?= mappingIdsAt diffResult [0] 
+             (Just ("v2a", Just "v1a")) @?= mappingIdsAt diffResult [1] 
   , testCase "simple value swap with value change" $
       let v1 = DiffTree "M" "Module" Nothing $
                 [ DiffTree "v1a" "Binding" (Just "Frederick") $
