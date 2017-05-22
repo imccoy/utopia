@@ -42,7 +42,7 @@ instance Eq TestSpec where
   TestSpec (Lam.SuspendSpec name1 args1 parents1) == TestSpec (Lam.SuspendSpec name2 args2 parents2) = name1 == name2 && testExpArgs args1 == testExpArgs args2 && (TestSpec <$> parents1) == (TestSpec <$> parents2)
 
 instance Show TestSpec where
-  showsPrec _ (TestSpec (Lam.SuspendSpec name args parents)) = ("SuspendSpec " ++) . (showsPrec 10 name) . (showsPrec 10 (testExpArgs args)) . (" " ++) . (showsPrec 10 (TestSpec <$> parents))
+  showsPrec _ (TestSpec (Lam.SuspendSpec name args parents)) = ("SuspendSpec " ++) . (showsPrec 10 name) . (" " ++) . (showsPrec 10 (testExpArgs args)) . (" " ++) . (showsPrec 10 (TestSpec <$> parents))
 
 testExpArgs :: [(n, Lam.Exp)] -> [(n, TestExp)]
 testExpArgs = traverse . _2 %~ TestExp
@@ -76,15 +76,36 @@ tests = testGroup "Parser"
       parseExp "\\this, that -> 3"
         @?= (mkTestExp $ Lam.lam ["this", "that"] (Lam.lit $ Lam.Number 3))
   , testCase "Exp app" $
-      parseExp "plus plus_1:3 plus_2:4"
+      parseExp "plus plus_1:(3) plus_2:(4)"
         @?= (mkTestExp $ Lam.app (Lam.var "plus") [("plus_1", Lam.lit $ Lam.Number 3), ("plus_2", Lam.lit $ Lam.Number 4)])
   , testCase "Arg no space" $
       (testExpArgs . pure <$> (parseWithEof "plus_1:7" Parser.pArg))
         @?= Right [("plus_1", TestExp $ Lam.lit $ Lam.Number 7)]
   , testCase "Arg with space" $
-      (testExpArgs . pure <$> (parseWithEof "plus_2 : 8" Parser.pArg))
+      (testExpArgs . pure <$> (parseWithEof "plus_2 : 8 " Parser.pArg))
         @?= Right [("plus_2", TestExp $ Lam.lit $ Lam.Number 8)]
-  , testCase "ExpApp args" $
-      (TestExp <$> (parseWithEof "plus plus_1:10 plus_2 : 9" Parser.pExpApp))
-        @?= (mkTestExp $ Lam.app (Lam.var "plus") [("plus_1", Lam.lit $ Lam.Number 10), ("plus_2", Lam.lit $ Lam.Number 9)])
+  , testCase "Exp app" $
+      parseExp "plus plus_1:3 plus_2:4"
+        @?= (mkTestExp $ Lam.app (Lam.var "plus") [("plus_1", Lam.lit $ Lam.Number 3), ("plus_2", Lam.lit $ Lam.Number 4)])
+  , testCase "Suspend with only name" $
+      parseExp "'(plus)"
+        @?= (mkTestExp $ Lam.suspend $ Lam.suspendSpec "plus"
+                                                       []
+                                                       [])
+  , testCase "Suspend with arg" $
+      parseExp "'(plus plus_2:(7))"
+        @?= (mkTestExp $ Lam.suspend $ Lam.suspendSpec "plus"
+                                                       [("plus_2", Lam.lit $ Lam.Number 7)]
+                                                       [])
+  , testCase "Suspend with arg and parent" $
+      parseExp "'(plus plus_1:(3) ^(minus minus_1:(4)))"
+        @?= (mkTestExp $ Lam.suspend $ Lam.suspendSpec "plus"
+                                                       [("plus_1", Lam.lit $ Lam.Number 3)]
+                                                       [Lam.suspendSpec "minus"
+                                                                        [("minus_1", Lam.lit $ Lam.Number 4)]
+                                                                        []
+                                                       ])
+  , testCase "varArgId" $
+      parseExp "*whowhat"
+        @?= (mkTestExp $ Lam.lamArgId "whowhat")
   ]

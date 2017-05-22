@@ -47,8 +47,15 @@ unionContents sc' = Lam.Union <$> between (L.lexeme sc' (string "{"))
                                           (L.lexeme sc' (string "}"))
                                           (sepBy (Identity <$> pName sc') (L.lexeme sc' (string ",")))
 
+pNonAppExp :: Parser () -> Parser Lam.Exp
+pNonAppExp sc' = pExpLit sc' <|> pExpVar sc' <|> pExpLam sc' <|> pExpParen sc' <|>  pExpRecord sc' <|> pExpSuspend sc' <|> pExpLamArgId sc'
+
 pExp :: Parser () -> Parser Lam.Exp
-pExp sc' = try (pExpLit sc') <|> try (pExpVar sc') <|> try (pExpLam sc') <|> pExpParen sc' <|>  pExpRecord sc' <|> pExpSuspend sc' <|> pExpLamArgId sc' <|> pExpApp sc'
+pExp sc' = do base <- pNonAppExp sc'
+              args <- many (pArg sc')
+              case args of
+                [] -> pure base
+                _ -> pure $ Lam.app base args
 
 pExpParen :: Parser () -> Parser Lam.Exp
 pExpParen sc' = between (L.lexeme sc' (string "("))
@@ -62,15 +69,10 @@ pExpLam sc' = do void $ L.lexeme sc' (string "\\")
                  body <- pExp sc'
                  pure $ Lam.lam names body
 
-pExpApp :: Parser () -> Parser Lam.Exp
-pExpApp sc' = do body <- pExp sc'
-                 args <- some $ pArg sc'
-                 pure $ Lam.app body args
-
 pArg :: Parser () -> Parser (T.Text, Lam.Exp)
 pArg sc' = do argName <- pName sc'
               void $ L.lexeme sc' (string ":")
-              argBody <- pExp sc'
+              argBody <- pNonAppExp sc'
               pure (argName, argBody)
 
 
@@ -83,27 +85,25 @@ pExpVar :: Parser () -> Parser Lam.Exp
 pExpVar sc' = Lam.var <$> pName sc'
 
 pExpSuspend :: Parser () -> Parser Lam.Exp
-pExpSuspend sc' = Lam.suspend <$> pSuspendSpec sc'
+pExpSuspend sc' = between (L.lexeme sc' (string "'("))
+                          (L.lexeme sc' (string ")"))
+                          (Lam.suspend <$> pSuspendSpec sc')
 
 pSuspendSpec :: Parser () -> Parser (Lam.SuspendSpec Identity Lam.Exp)
-pSuspendSpec sc' = do void $ L.lexeme sc' (string "'")
-                      name <- pName sc'
-                      pSuspendSpecDetails sc' (Lam.suspendSpec name [] [])
+pSuspendSpec sc' = do name <- pName sc'
+                      argsParents <- many $ pSuspendSpecDetails sc'
+                      let args = concat $ fmap fst argsParents
+                      let parents = concat $ fmap snd argsParents
+                      pure $ Lam.suspendSpec name args parents
 
-pSuspendSpecDetails :: Parser () -> Lam.SuspendSpec Identity Lam.Exp -> Parser (Lam.SuspendSpec Identity Lam.Exp)
-pSuspendSpecDetails sc' spec = pSuspendSpecParent sc' spec <|> pSuspendSpecArg sc' spec
+pSuspendSpecDetails :: Parser () -> Parser ([(Text, Lam.Exp)], [Lam.SuspendSpec Identity Lam.Exp])
+pSuspendSpecDetails sc' = ((([],) . pure) <$> pSuspendSpecParent sc')
+                             <|> (((,[]) . pure) <$> pArg sc')
 
-pSuspendSpecParent :: Parser () -> Lam.SuspendSpec Identity Lam.Exp -> Parser (Lam.SuspendSpec Identity Lam.Exp)
-pSuspendSpecParent sc' spec = do void $ L.lexeme sc' (string "^")
-                                 parent <- pSuspendSpec sc' <|> between (L.lexeme sc' (string "("))
-                                                                        (L.lexeme sc' (string ")"))
-                                                                        (pSuspendSpec sc')
-                                 pSuspendSpecDetails sc' $ Lam.suspendSpecWithParent spec parent
-
-pSuspendSpecArg :: Parser () -> Lam.SuspendSpec Identity Lam.Exp -> Parser (Lam.SuspendSpec Identity Lam.Exp)
-pSuspendSpecArg sc' spec = do arg <- pArg sc'
-                              pSuspendSpecDetails sc' $ Lam.suspendSpecWithArg spec arg
-
+pSuspendSpecParent :: Parser () -> Parser (Lam.SuspendSpec Identity Lam.Exp)
+pSuspendSpecParent sc' = between (L.lexeme sc' (string "^("))
+                                 (L.lexeme sc' (string ")"))
+                                 (pSuspendSpec sc')
 
 
 pExpLamArgId :: Parser () -> Parser Lam.Exp
