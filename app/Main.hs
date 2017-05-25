@@ -4,6 +4,7 @@ import Prelude hiding (id, putStrLn)
 
 import Control.Lens hiding (children, mapping)
 import Control.Monad.Reader
+import Data.Either.Combinators (eitherToError, mapLeft)
 import qualified Data.Map as Map
 import Data.Set (Set)
 import qualified Data.Set as Set
@@ -35,7 +36,8 @@ main = do
 --  printProjection v2projection
 
   putStrLn "oneshoty====="
-  (oneshotBindingsWithIds, oneshotProjection) <- projectCode Code.oneshot
+  oneshotParseTree <- eitherToError . mapLeft (userError . show) $ Code.oneshot
+  (oneshotBindingsWithIds, oneshotProjection) <- projectCode oneshotParseTree
   printProjection oneshotProjection
 
 --  let (reversedDiffResult, diffResult) = diffProjection initialDb v2projection

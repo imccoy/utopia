@@ -54,6 +54,7 @@ deriving instance (Show (w Name), Show (Fix (ExpW w))) => Show (BindingContents 
 data Typeish w = Union [w Name]
 
 deriving instance (Show (w Name)) => Show (Typeish w)
+deriving instance (Eq (w Name)) => Eq (Typeish w)
 
 newtype ExpW w e = ExpW (w (ExpF w e))
   deriving (Functor, Prelude.Foldable, Traversable)

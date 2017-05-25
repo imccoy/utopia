@@ -1,8 +1,14 @@
+{-# LANGUAGE QuasiQuotes #-}
 module Code where
 
-import Lam
-import Data.Functor.Identity
-import Data.Text (Text)
+import           Data.Functor.Identity
+import           Data.Text (Text)
+import qualified Data.Text as T
+import qualified NeatInterpolation
+import qualified Text.Megaparsec
+
+import           Parser
+import           Lam
 
 v1 :: [Binding Identity]
 v1 = [ expBinding "add2" $ lam ["n"] $
@@ -53,6 +59,36 @@ tracey = [ expBinding "gen1" $ lam ["gen1_n"] $
                       ]
          ]
 
+--tracey' :: Text
+--tracey' = 
+--  [NeatInterpolation.text|
+--    gen1 = \gen1_n -> gen1_n
+--    gen2 = \gen2_n -> gen2_n
+--    glue1 = \ -> [gen1 gen1_n: 1, gen1 gen1_n: 2, gen1 gen1_n: 3]
+--    glue2a = \ -> suspensionFrameList suspensionFrameList_suspension:'(gen1)
+--    glue2 = \ -> listMap listMap_list: glue2a
+--                         listMap_f: \glue2_elem -> gen2 gen2_n:(frameArg frameArg_frame:glue2_elem
+--                                                                         frameArg_arg:*gen1_n)
+--    glue3 = suspensionFrameList suspensionFrameList_suspension:'(gen2)
+--    main = [gen1, gen2, gen3]
+--  |]
+tracey' :: Text
+tracey' = 
+  [NeatInterpolation.text|
+    gen1 = \(gen1_n -> gen1_n)
+    gen2 = \(gen2_n -> gen2_n)
+    gen3 = \(gen3_n -> gen3_n)
+    glue1 = [gen1 gen1_n: 1, gen1 gen1_n: 2, gen1 gen1_n: 3]
+    glue2a = suspensionFrameList suspensionFrameList_suspension:'(gen1)
+    glue2 = listMap listMap_list: glue2a
+                    listMap_f: \(glue2_elem -> gen2 gen2_n:(frameArg frameArg_frame:glue2_elem 
+                                                                     frameArg_arg:*gen1_n))
+    glue3 = suspensionFrameList suspensionFrameList_suspension:'(gen2)
+    main = [glue1, glue2, glue3]
+  |]
+
+
+
 nestedMaps :: [Binding Identity]
 nestedMaps = [ expBinding "main" $ lam [] $
                  listOf [
@@ -90,8 +126,13 @@ findMax = [ expBinding "main" $ lam [] $
           ]
 
 
-oneshot :: [Binding Identity]
-oneshot = findMax
+oneshot :: Either (Text.Megaparsec.ParseError Char Text.Megaparsec.Dec) [Binding Identity]
+--oneshot = Right findMax
+oneshot = Text.Megaparsec.parse (Text.Megaparsec.between (pure ())
+                                                         Text.Megaparsec.eof
+                                                         Parser.parser)
+                                "inline" (Parser.collapseCode . T.unpack $ tracey')
+
 
 -- data Event details env = Event Time details env
 -- data EventDetails = ButtonClick
@@ -303,6 +344,16 @@ todoWeb = [ expBinding "todoRecord" $ record ["todoRecord_id", "todoRecord_text"
                                   (htmlElementEvents $ frameResult (var "clicks_frame"))
           , expBinding "identityFunction" $ lam ["identityFunction_arg"] (var "identityFunction_arg")
           ] 
+
+todoWeb' :: Text
+todoWeb' = 
+  [NeatInterpolation.text|
+  todoRecord = { todoRecord_id todoRecord_text }
+  todoTextBox = \ -> htmlTextInput
+  todoAddButton = \ -> htmlButton htmlButton_text: "Add"
+  todoForm = \todoForm_n -> [ todoTextBox, todoAddButton ]
+  savedTodos = \ -> listConcat listConcat_lists:listMap (\
+  |]
 
 --
 --todo :: [Binding Identity]

@@ -36,6 +36,7 @@ library
                        lens,
                        megaparsec,
                        mtl,
+                       neat-interpolation,
                        random,
                        recursion-schemes,
                        safe,
@@ -53,7 +54,7 @@ test-suite test
                        RankNTypes,
                        RecordWildCards
   build-depends:       base,
-                       constraints,
+                       containers,
                        lens,
                        megaparsec,
                        mtl,

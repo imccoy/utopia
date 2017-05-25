@@ -1,8 +1,9 @@
-{-# LANGUAGE FlexibleInstances, InstanceSigs, DeriveTraversable, ScopedTypeVariables, TypeOperators, FlexibleContexts, UndecidableInstances #-}
+{-# LANGUAGE FlexibleInstances, InstanceSigs, DeriveTraversable, ScopedTypeVariables, TypeOperators, FlexibleContexts, UndecidableInstances, TupleSections, LambdaCase #-}
 module ParserTest where
 
 import Control.Lens
 import Data.Functor.Foldable.Extended
+import qualified Data.Text as T
 import Test.Tasty
 import Test.Tasty.HUnit
 import Text.Megaparsec (parse)
@@ -47,19 +48,55 @@ instance Show TestSpec where
 testExpArgs :: [(n, Lam.Exp)] -> [(n, TestExp)]
 testExpArgs = traverse . _2 %~ TestExp
 
-parseWithEof :: String -> (Text.Megaparsec.Parsec Text.Megaparsec.Dec String () -> Text.Megaparsec.Parsec Text.Megaparsec.Dec String a) -> Either (Text.Megaparsec.Error.ParseError Char Text.Megaparsec.Error.Dec) a
-parseWithEof s p = parse (do r <- p Parser.sc 
-                             Text.Megaparsec.eof
-                             pure r)
-                         "inline" s
+parseWithEof :: String -> Text.Megaparsec.Parsec Text.Megaparsec.Dec String a -> Either (Text.Megaparsec.Error.ParseError Char Text.Megaparsec.Error.Dec) a
+parseWithEof s p = parse (p <* Parser.scn <* Text.Megaparsec.eof)
+                         "inline" (s ++ "\n")
 
 
+type ParseResult r = Either (Text.Megaparsec.Error.ParseError Char Text.Megaparsec.Error.Dec) r
 
-parseExp :: String -> Either (Text.Megaparsec.Error.ParseError Char Text.Megaparsec.Error.Dec) (TestExp)
+parseExp :: String -> ParseResult TestExp
 parseExp s = TestExp <$> parseWithEof s Parser.pExp
 
-mkTestExp :: forall a. Lam.Exp -> Either a TestExp
+parseBinding :: (Lam.BindingContents Identity -> b) -> String -> ParseResult (Lam.Name, b)
+parseBinding f s = do Lam.Binding n binding <- parseWithEof s Parser.pBinding
+                      pure (n, f binding)
+
+parseBindings :: (Lam.BindingContents Identity -> b) -> String -> ParseResult [(Lam.Name, b)]
+parseBindings f s = do bindings <- parseWithEof s Parser.pBindings
+                       pure [(n, f binding) | Lam.Binding n binding <- bindings]
+
+
+parseExpBinding :: String -> ParseResult (Lam.Name, Maybe TestExp)
+parseExpBinding = parseBinding $ \case 
+                                   Lam.BindingExp e -> Just $ TestExp e
+                                   _ -> Nothing
+
+parseExpsBinding :: String -> ParseResult [(Lam.Name, Maybe TestExp)]
+parseExpsBinding = parseBindings $ \case 
+                                     Lam.BindingExp e -> Just $ TestExp e
+                                     _ -> Nothing
+                      
+ 
+parseTypeishBinding :: String -> ParseResult (Lam.Name, Maybe (Lam.Typeish Identity))
+parseTypeishBinding = parseBinding $ \case 
+                                       Lam.BindingTypeish t -> Just t
+                                       _ -> Nothing
+                      
+                     
+
+mkTestExp :: Lam.Exp -> ParseResult TestExp
 mkTestExp = Right . TestExp
+
+mkTestExpBinding :: T.Text -> Lam.Exp -> ParseResult (Lam.Name, Maybe TestExp)
+mkTestExpBinding name binding = Right (name, Just $ TestExp binding)
+
+mkTestExpsBinding :: [(T.Text, Lam.Exp)] -> ParseResult [(Lam.Name, Maybe TestExp)]
+mkTestExpsBinding nameBindings = Right [(name, Just $ TestExp binding) | (name, binding) <- nameBindings]
+
+
+mkTestTypeishBinding :: T.Text -> Lam.Typeish Identity -> ParseResult (Lam.Name, Maybe (Lam.Typeish Identity))
+mkTestTypeishBinding name binding = Right (name, Just binding)
 
 tests :: TestTree
 tests = testGroup "Parser"
@@ -73,31 +110,31 @@ tests = testGroup "Parser"
       parseExp "referent"
         @?= (mkTestExp $ Lam.var "referent")
   , testCase "Exp lam" $
-      parseExp "\\this, that -> 3"
+      parseExp "\\(this, that -> 3)"
         @?= (mkTestExp $ Lam.lam ["this", "that"] (Lam.lit $ Lam.Number 3))
   , testCase "Exp app" $
       parseExp "plus plus_1:(3) plus_2:(4)"
         @?= (mkTestExp $ Lam.app (Lam.var "plus") [("plus_1", Lam.lit $ Lam.Number 3), ("plus_2", Lam.lit $ Lam.Number 4)])
   , testCase "Arg no space" $
-      (testExpArgs . pure <$> (parseWithEof "plus_1:7" Parser.pArg))
+      (testExpArgs . pure <$> (parseWithEof "plus_1:7" (Parser.pArg Parser.pNonAppExp)))
         @?= Right [("plus_1", TestExp $ Lam.lit $ Lam.Number 7)]
   , testCase "Arg with space" $
-      (testExpArgs . pure <$> (parseWithEof "plus_2 : 8 " Parser.pArg))
+      (testExpArgs . pure <$> (parseWithEof "plus_2 : 8 " (Parser.pArg Parser.pNonAppExp)))
         @?= Right [("plus_2", TestExp $ Lam.lit $ Lam.Number 8)]
   , testCase "Exp app" $
       parseExp "plus plus_1:3 plus_2:4"
         @?= (mkTestExp $ Lam.app (Lam.var "plus") [("plus_1", Lam.lit $ Lam.Number 3), ("plus_2", Lam.lit $ Lam.Number 4)])
-  , testCase "Suspend with only name" $
+  , testCase "Exp suspend with only name" $
       parseExp "'(plus)"
         @?= (mkTestExp $ Lam.suspend $ Lam.suspendSpec "plus"
                                                        []
                                                        [])
-  , testCase "Suspend with arg" $
+  , testCase "Exp suspend with arg" $
       parseExp "'(plus plus_2:(7))"
         @?= (mkTestExp $ Lam.suspend $ Lam.suspendSpec "plus"
                                                        [("plus_2", Lam.lit $ Lam.Number 7)]
                                                        [])
-  , testCase "Suspend with arg and parent" $
+  , testCase "Exp suspend with arg and parent" $
       parseExp "'(plus plus_1:(3) ^(minus minus_1:(4)))"
         @?= (mkTestExp $ Lam.suspend $ Lam.suspendSpec "plus"
                                                        [("plus_1", Lam.lit $ Lam.Number 3)]
@@ -105,7 +142,39 @@ tests = testGroup "Parser"
                                                                         [("minus_1", Lam.lit $ Lam.Number 4)]
                                                                         []
                                                        ])
-  , testCase "varArgId" $
+  , testCase "Exp varArgId" $
       parseExp "*whowhat"
         @?= (mkTestExp $ Lam.lamArgId "whowhat")
+  , testCase "Exp Record" $
+      parseExp "{ a b }"
+        @?= (mkTestExp $ Lam.record ["a", "b"])
+  , testCase "Exp binding" $
+      parseExpBinding "a = 1"
+        @?= (mkTestExpBinding "a" (Lam.lit $ Lam.Number 1))
+  , testCase "Exp binding with all the trimmings" $
+      parseExpBinding "b = thingy thing:(\\(a -> plus plus_1:a plus_2:a) a:1) thingor:'(thang thang:3) thingy:*what"
+        @?= (mkTestExpBinding "b" $ Lam.app (Lam.var "thingy")
+                                            [("thing", Lam.app (Lam.lam ["a"] $
+                                                                  Lam.app (Lam.var "plus")
+                                                                          [("plus_1", Lam.var "a")
+                                                                          ,("plus_2", Lam.var "a")]
+                                                               )
+                                                               [("a", Lam.lit $ Lam.Number 1)]
+                                             )
+                                            ,("thingor", Lam.suspend $ Lam.suspendSpec "thang" [("thang", Lam.lit $ Lam.Number 3)] [])
+                                            ,("thingy", Lam.lamArgId "what")
+                                            ]
+            )
+  , testCase "Two bindings" $
+      parseExpsBinding "a = \\(c -> 1)\nb=2"
+        @?= (mkTestExpsBinding [("a", Lam.lam ["c"] $
+                                        Lam.lit $ Lam.Number 1)
+                               ,("b", Lam.lit $ Lam.Number 2)
+                               ])
+  , testCase "Union binding" $
+      parseTypeishBinding "z = Union { a b }"
+        @?= (mkTestTypeishBinding "z" (Lam.union ["a", "b"]))
+  , testCase "collapse lines" $
+      Parser.collapseLines ["   z", "a", " b", "         c", "d", " e", "f"]
+        @?= ["   z", "a b c", "d e", "f"]
   ]
