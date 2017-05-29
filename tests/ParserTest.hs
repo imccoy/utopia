@@ -10,6 +10,7 @@ import Text.Megaparsec (parse)
 import qualified Text.Megaparsec
 import qualified Text.Megaparsec.Error
 
+import qualified Code
 import qualified Parser as Parser
 import qualified Lam as Lam
 
@@ -29,13 +30,13 @@ instance Eq TestExp where
 instance Show TestExp where
   showsPrec _ (TestExp (Fix (Lam.ExpW (Identity a)))) = go a
     where
-      go (Lam.LamF args body) = ("LamF " ++) . showsPrec 0 args . (" " ++) . showsPrec 0 (TestExp body)
-      go (Lam.AppF fun args)  = ("AppF " ++) . showsPrec 0 (TestExp fun) . (" " ++) . showsPrec 0 (testExpArgs args)
-      go (Lam.RecordF args)   = ("RecordF " ++) . showsPrec 0 args
-      go (Lam.VarF name)      = ("VarF " ++) . showsPrec 0 name
-      go (Lam.SuspendF spec)  = ("SuspendF " ++) . showsPrec 0 (TestSpec spec)
-      go (Lam.LamArgIdF name) = ("LamArgIdF " ++) . showsPrec 0 name
-      go (Lam.LitF val)       = ("LitF " ++) . showsPrec 0 val
+      go (Lam.LamF args body) = ("(LamF " ++) . showsPrec 0 args . (" " ++) . showsPrec 0 (TestExp body) . (++ ")")
+      go (Lam.AppF fun args)  = ("(AppF " ++) . showsPrec 0 (TestExp fun) . (" " ++) . showsPrec 0 (testExpArgs args) . (++ ")")
+      go (Lam.RecordF args)   = ("(RecordF " ++) . showsPrec 0 args . (++ ")")
+      go (Lam.VarF name)      = ("(VarF " ++) . showsPrec 0 name . (++ ")")
+      go (Lam.SuspendF spec)  = ("(SuspendF " ++) . showsPrec 0 (TestSpec spec) . (++ ")")
+      go (Lam.LamArgIdF name) = ("(LamArgIdF " ++) . showsPrec 0 name . (++ ")")
+      go (Lam.LitF val)       = ("(LitF " ++) . showsPrec 0 val . (++ ")")
 
 newtype TestSpec = TestSpec (Lam.SuspendSpec Identity Lam.Exp)
 
@@ -44,6 +45,11 @@ instance Eq TestSpec where
 
 instance Show TestSpec where
   showsPrec _ (TestSpec (Lam.SuspendSpec name args parents)) = ("SuspendSpec " ++) . (showsPrec 10 name) . (" " ++) . (showsPrec 10 (testExpArgs args)) . (" " ++) . (showsPrec 10 (TestSpec <$> parents))
+
+data TestBindingContents = TestExpBinding TestExp | TestTypeishBinding (Lam.Typeish Identity)
+
+deriving instance Show TestBindingContents
+deriving instance Eq TestBindingContents
 
 testExpArgs :: [(n, Lam.Exp)] -> [(n, TestExp)]
 testExpArgs = traverse . _2 %~ TestExp
@@ -58,45 +64,36 @@ type ParseResult r = Either (Text.Megaparsec.Error.ParseError Char Text.Megapars
 parseExp :: String -> ParseResult TestExp
 parseExp s = TestExp <$> parseWithEof s Parser.pExp
 
-parseBinding :: (Lam.BindingContents Identity -> b) -> String -> ParseResult (Lam.Name, b)
-parseBinding f s = do Lam.Binding n binding <- parseWithEof s Parser.pBinding
-                      pure (n, f binding)
+parseBinding :: String -> ParseResult (Lam.Name, TestBindingContents)
+parseBinding s = do Lam.Binding n binding <- parseWithEof s Parser.pBinding
+                    pure (n, testBindingContents binding)
 
-parseBindings :: (Lam.BindingContents Identity -> b) -> String -> ParseResult [(Lam.Name, b)]
-parseBindings f s = do bindings <- parseWithEof s Parser.pBindings
-                       pure [(n, f binding) | Lam.Binding n binding <- bindings]
+testBindingContents :: Lam.BindingContents Identity -> TestBindingContents
+testBindingContents (Lam.BindingExp e) = TestExpBinding $ TestExp e
+testBindingContents (Lam.BindingTypeish t) = TestTypeishBinding t
 
+testBinding :: Lam.Binding Identity -> (Lam.Name, TestBindingContents)
+testBinding (Lam.Binding n contents) = (n, testBindingContents contents)
 
-parseExpBinding :: String -> ParseResult (Lam.Name, Maybe TestExp)
-parseExpBinding = parseBinding $ \case 
-                                   Lam.BindingExp e -> Just $ TestExp e
-                                   _ -> Nothing
+parseBindings :: String -> ParseResult [(Lam.Name, TestBindingContents)]
+parseBindings s = testBindings <$> parseWithEof s Parser.pBindings
 
-parseExpsBinding :: String -> ParseResult [(Lam.Name, Maybe TestExp)]
-parseExpsBinding = parseBindings $ \case 
-                                     Lam.BindingExp e -> Just $ TestExp e
-                                     _ -> Nothing
-                      
- 
-parseTypeishBinding :: String -> ParseResult (Lam.Name, Maybe (Lam.Typeish Identity))
-parseTypeishBinding = parseBinding $ \case 
-                                       Lam.BindingTypeish t -> Just t
-                                       _ -> Nothing
-                      
-                     
+testBindings :: [Lam.Binding Identity] -> [(Lam.Name, TestBindingContents)]
+testBindings = map testBinding
 
 mkTestExp :: Lam.Exp -> ParseResult TestExp
 mkTestExp = Right . TestExp
 
-mkTestExpBinding :: T.Text -> Lam.Exp -> ParseResult (Lam.Name, Maybe TestExp)
-mkTestExpBinding name binding = Right (name, Just $ TestExp binding)
+mkTestExpBinding :: T.Text -> Lam.Exp -> ParseResult (Lam.Name, TestBindingContents)
+mkTestExpBinding name binding = Right (name, TestExpBinding . TestExp $ binding)
 
-mkTestExpsBinding :: [(T.Text, Lam.Exp)] -> ParseResult [(Lam.Name, Maybe TestExp)]
-mkTestExpsBinding nameBindings = Right [(name, Just $ TestExp binding) | (name, binding) <- nameBindings]
+mkTestExpsBinding :: [(T.Text, Lam.Exp)] -> ParseResult [(Lam.Name, TestBindingContents)]
+mkTestExpsBinding nameBindings = Right [(name, TestExpBinding . TestExp $ binding) | (name, binding) <- nameBindings]
 
 
-mkTestTypeishBinding :: T.Text -> Lam.Typeish Identity -> ParseResult (Lam.Name, Maybe (Lam.Typeish Identity))
-mkTestTypeishBinding name binding = Right (name, Just binding)
+
+mkTestTypeishBinding :: T.Text -> Lam.Typeish Identity -> ParseResult [(Lam.Name, TestBindingContents)]
+mkTestTypeishBinding name binding = Right [(name, TestTypeishBinding binding)]
 
 tests :: TestTree
 tests = testGroup "Parser"
@@ -110,7 +107,7 @@ tests = testGroup "Parser"
       parseExp "referent"
         @?= (mkTestExp $ Lam.var "referent")
   , testCase "Exp lam" $
-      parseExp "\\(this, that -> 3)"
+      parseExp "\\(this that -> 3)"
         @?= (mkTestExp $ Lam.lam ["this", "that"] (Lam.lit $ Lam.Number 3))
   , testCase "Exp app" $
       parseExp "plus plus_1:(3) plus_2:(4)"
@@ -149,10 +146,10 @@ tests = testGroup "Parser"
       parseExp "{ a b }"
         @?= (mkTestExp $ Lam.record ["a", "b"])
   , testCase "Exp binding" $
-      parseExpBinding "a = 1"
+      parseBinding "a = 1"
         @?= (mkTestExpBinding "a" (Lam.lit $ Lam.Number 1))
   , testCase "Exp binding with all the trimmings" $
-      parseExpBinding "b = thingy thing:(\\(a -> plus plus_1:a plus_2:a) a:1) thingor:'(thang thang:3) thingy:*what"
+      parseBinding "b = thingy thing:(\\(a -> plus plus_1:a plus_2:a) a:1) thingor:'(thang thang:3) thingy:*what"
         @?= (mkTestExpBinding "b" $ Lam.app (Lam.var "thingy")
                                             [("thing", Lam.app (Lam.lam ["a"] $
                                                                   Lam.app (Lam.var "plus")
@@ -166,15 +163,18 @@ tests = testGroup "Parser"
                                             ]
             )
   , testCase "Two bindings" $
-      parseExpsBinding "a = \\(c -> 1)\nb=2"
+      parseBindings "a = \\(c -> 1)\nb=2"
         @?= (mkTestExpsBinding [("a", Lam.lam ["c"] $
                                         Lam.lit $ Lam.Number 1)
                                ,("b", Lam.lit $ Lam.Number 2)
                                ])
   , testCase "Union binding" $
-      parseTypeishBinding "z = Union { a b }"
+      parseBindings "z = Union { a b }"
         @?= (mkTestTypeishBinding "z" (Lam.union ["a", "b"]))
   , testCase "collapse lines" $
       Parser.collapseLines ["   z", "a", " b", "         c", "d", " e", "f"]
         @?= ["   z", "a b c", "d e", "f"]
+  , testCase "big thing is accurately transcribed" $
+      parseBindings (Parser.collapseCode $ T.unpack Code.todoWeb')
+        @?= Right (testBindings Code.todoWeb)
   ]

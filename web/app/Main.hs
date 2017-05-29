@@ -5,6 +5,7 @@ import Prelude hiding (id)
 import qualified Unsafe.Coerce
 
 import           Control.Monad (void)
+import           Data.Either.Combinators (eitherToError, mapLeft)
 import qualified Data.IORef as IORef
 import qualified Data.JSString as JSS
 import qualified Data.Set as Set
@@ -33,7 +34,7 @@ import CodeDb (CodeDbId(..), codeDbIdText)
 import qualified Eval
 import Eval (Val(..))
 import Lam (bindingsWithIdText, mapBindingId)
-import Prim (Prim(..))
+import Primitives (Prim(..))
 import qualified Run
 
 textDiv :: String -> VNode
@@ -61,9 +62,9 @@ type Universes = [(Instant, Universe)]
 wrapEventDetails :: Event -> Eval.Val CodeDbId
 wrapEventDetails e = case eventDetails e of
   ClickEvent -> Builtins.unionVal Map.empty (CodeDbId "builtin-htmlEventDetails-htmlEventDetails_click")
-                                            (Primitive $ Prim.Text "")
+                                            (Primitive $ Primitives.Text "")
   ChangeEvent t -> Builtins.unionVal Map.empty (CodeDbId "builtin-htmlEventDetails-htmlEventDetails_textChange")
-                                               (Primitive $ Prim.Text t)
+                                               (Primitive $ Primitives.Text t)
 
 addEvent :: Event -> Eval.Frame CodeDbId -> AllEvents -> (AllEvents,AllEvents)
 addEvent event frame allEvents = let result = addEvent' event frame allEvents
@@ -80,7 +81,7 @@ expandUniverses :: Instant -> EventDetails -> Eval.Frame CodeDbId -> Universes -
 expandUniverses instant eventDetails frame universes = let r = (instant, nextUniverse eventDetails (lastUniverse universes)):universes
                                                         in (r, r)
   where nextUniverse ClickEvent prev = prev
-        nextUniverse (ChangeEvent text) prev = Map.insert (frame, TextValue) (Primitive $ Prim.Text text) prev
+        nextUniverse (ChangeEvent text) prev = Map.insert (frame, TextValue) (Primitive $ Primitives.Text text) prev
 
 inputTextFromEvent :: Ev.Event -> IO (Maybe Text)
 inputTextFromEvent ev = do let evVal = (Unsafe.Coerce.unsafeCoerce ev :: JSVal)
@@ -103,13 +104,13 @@ renderVal onEvent (ValList [ Primitive (Text "textInput")
                                         ([] :: [VNode])
 
 renderVal onEvent (ValList elems) = E.div () $ map (renderVal onEvent) elems
-renderVal _ _                     = textDiv "That ain't no element"
+renderVal _       val             = textDiv $ "That ain't no element" ++ show val
 
 envFromEvents :: Map (Eval.Frame CodeDbId) [Event] -> Map CodeDbId (Val CodeDbId)
 envFromEvents = Map.fromList . map envFromEvent . Map.assocs
   where envFromEvent (frame, events) = (CodeDbId $ "events-" `T.append` (T.pack . show $ frame), ValList $ eventVal <$> events)
         eventVal event = Eval.ValFrame . Eval.Frame Nothing (CodeDbId "builtin-event") . Map.fromList $ 
-                             [(CodeDbId "builtin-event-event_instant", Eval.ValList $ Eval.Primitive . Prim.Number <$> eventInstant event)
+                             [(CodeDbId "builtin-event-event_instant", Eval.ValList $ Eval.Primitive . Primitives.Number <$> eventInstant event)
                              ,(CodeDbId "builtin-event-event_details", wrapEventDetails event)
                              ]
 
@@ -131,7 +132,8 @@ newInstant time instants = (Set.insert free instants, free)
 
 
 runWeb :: VMount -> IO ()
-runWeb mountPoint = do (bindingsWithIds, _) <- Run.projectCode Code.web
+runWeb mountPoint = do codeParseTree <- pure Code.todoWeb  -- eitherToError . mapLeft (userError . show) $ Right $ Code.web
+                       (bindingsWithIds, _) <- Run.projectCode codeParseTree
                        putStrLn $ T.unpack $ bindingsWithIdText (mapBindingId codeDbIdText <$> bindingsWithIds)
                        events <- IORef.newIORef Map.empty
                        universes <- IORef.newIORef []

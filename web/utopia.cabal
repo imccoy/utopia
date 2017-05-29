@@ -36,6 +36,7 @@ library
                        lens,
                        megaparsec,
                        mtl,
+                       neat-interpolation,
                        random,
                        recursion-schemes,
                        safe,

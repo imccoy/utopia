@@ -47,7 +47,7 @@ pBinding :: Parser (Lam.Binding Identity)
 pBinding = do name <- pName
               void $ lexeme $ string "="
               bindingContents <- pBindingContents
-              string "\n"
+              void $ string "\n"
               pure $ Lam.Binding name bindingContents
 
 pBindingContents :: Parser (Lam.BindingContents Identity)
@@ -84,7 +84,7 @@ pExpParen = between (lexeme (string "("))
 
 pExpLam :: Parser Lam.Exp
 pExpLam = do void $ lexeme (string "\\(")
-             names <- sepBy (pName) (lexeme (string ","))
+             names <- many pName
              void $ lexeme (string "->")
              body <- pExp
              void $ lexeme (string ")")

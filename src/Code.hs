@@ -164,8 +164,8 @@ listSum list = app (var "listSum")
 
 listMap :: Exp -> Exp -> Exp
 listMap f list = app (var "listMap")
-                     [ ("listMap_list", list)
-                     , ("listMap_f", f)
+                     [ ("listMap_f", f)
+                     , ("listMap_list", list)
                      ]
 
 
@@ -277,18 +277,23 @@ maybeResult_nothing = app (var "construct") [("construct_with", lamArgId "maybeR
 
 maybeResult_just v = app (var "construct") [("construct_with", lamArgId "maybeResult_just"), ("construct_payload", v)]
 
-web :: [Binding Identity]
-web = todoWeb
+web :: Either (Text.Megaparsec.ParseError Char Text.Megaparsec.Dec) [Binding Identity]
+--web = Right todoWeb
+web = Text.Megaparsec.parse (Text.Megaparsec.between (pure ())
+                                                     Text.Megaparsec.eof
+                                                     Parser.parser)
+                            "inline" (Parser.collapseCode . T.unpack $ todoWeb')
+
 
 todoWeb :: [Binding Identity]
 todoWeb = [ expBinding "todoRecord" $ record ["todoRecord_id", "todoRecord_text"]
           , expBinding "todoTextBox" $ lam [] $
-              app (var "htmlTextInput") []
+              var "htmlTextInput"
           , expBinding "todoAddButton" $ lam [] $
               app (var "htmlButton") [("htmlButton_text", lit (Text "Add"))]
           , expBinding "todoForm" $ lam ["todoForm_n"] $
-              listOf [ app (var "todoTextBox") []
-                     , app (var "todoAddButton") []
+              listOf [ var "todoTextBox"
+                     , var "todoAddButton"
                      ]
           , expBinding "savedTodos" $ lam [] $
               listConcat $ listMap (lam ["savedTodos_preTodo"] $
@@ -310,7 +315,8 @@ todoWeb = [ expBinding "todoRecord" $ record ["todoRecord_id", "todoRecord_text"
                                                                                             [("clicks_frame", var "savedTodos_buttonFrame")
                                                                                             ,("clicks_todoFormId", frameArgLit (var "savedTodos_formFrame") "todoForm_n")]
                                                                                    )
-                                                                                   (suspensionFrameList (suspend $ suspendSpec "todoAddButton" [] [suspendSpec "todoForm" [("todoForm_n", frameArgLit (var "savedTodos_formFrame") "todoForm_n")] []]))
+                                                                                   (suspensionFrameList (suspend $ suspendSpec "todoAddButton" [] 
+                                                                                                                               [suspendSpec "todoForm" [("todoForm_n", frameArgLit (var "savedTodos_formFrame") "todoForm_n")] []]))
                                                          )
                                                          (suspensionFrameList (suspend $ suspendSpec "todoForm" [] []))
                                    )
@@ -321,11 +327,10 @@ todoWeb = [ expBinding "todoRecord" $ record ["todoRecord_id", "todoRecord_text"
                       )
                       (var "savedTodos")
           , expBinding "unsavedTodoForm" $ lam [] $
-              app (var "todoForm") [("todoForm_n", listLength (app (var "savedTodoWidgets") []))]
+              app (var "todoForm") [("todoForm_n", listLength (var "savedTodoWidgets"))]
           , expBinding "main" $ lam [] $
-              listOf [ app (var "unsavedTodoForm") []
-                     , app (var "savedTodoWidgets") []
-                     , htmlText (numberToText (listLength (app (var "savedTodoWidgets") [])))
+              listOf [ var "unsavedTodoForm"
+                     , var "savedTodoWidgets"
                      ]
           , expBinding "preTodo" $ record ["preTodo_todoInputId", "preTodo_instant"]
           , expBinding "clicks" $ lam ["clicks_frame", "clicks_todoFormId"] $
@@ -342,17 +347,49 @@ todoWeb = [ expBinding "todoRecord" $ record ["todoRecord_id", "todoRecord_text"
                                            ]
                                   )
                                   (htmlElementEvents $ frameResult (var "clicks_frame"))
-          , expBinding "identityFunction" $ lam ["identityFunction_arg"] (var "identityFunction_arg")
           ] 
 
 todoWeb' :: Text
 todoWeb' = 
   [NeatInterpolation.text|
   todoRecord = { todoRecord_id todoRecord_text }
-  todoTextBox = \ -> htmlTextInput
-  todoAddButton = \ -> htmlButton htmlButton_text: "Add"
-  todoForm = \todoForm_n -> [ todoTextBox, todoAddButton ]
-  savedTodos = \ -> listConcat listConcat_lists:listMap (\
+  todoTextBox = \( -> htmlTextInput)
+  todoAddButton = \( -> htmlButton htmlButton_text: "Add")
+  todoForm = \(todoForm_n -> [ todoTextBox, todoAddButton ])
+  savedTodos = \( -> listConcat listConcat_lists:(listMap
+    listMap_f: \(savedTodos_preTodo -> listMap
+      listMap_f: \(savedTodos_textBox -> todoRecord 
+        todoRecord_id: (frameArg frameArg_frame:savedTodos_preTodo frameArg_arg:*preTodo_instant)
+        todoRecord_text: (htmlTextInputValue 
+          htmlTextInputValue_htmlInput: (frameResult frameResult_frame:savedTodos_textBox)
+          htmlTextInputValue_instant: (frameArg frameArg_frame:savedTodos_preTodo frameArg_arg:*preTodo_instant)))
+                              
+      listMap_list: (suspensionFrameList suspensionFrameList_suspension:'(todoTextBox ^(todoForm todoForm_n:(frameArg frameArg_frame:savedTodos_preTodo frameArg_arg:*preTodo_todoInputId))))
+    )
+    listMap_list: (listConcat listConcat_lists:(listMap
+      listMap_f: \(savedTodos_formFrame -> listConcat listConcat_lists:(listMap
+        listMap_f: \(savedTodos_buttonFrame -> clicks
+          clicks_frame: savedTodos_buttonFrame
+          clicks_todoFormId: (frameArg frameArg_frame:savedTodos_formFrame frameArg_arg:*todoForm_n))
+        listMap_list: (suspensionFrameList suspensionFrameList_suspension:'(todoAddButton ^(todoForm todoForm_n:(frameArg frameArg_frame:savedTodos_formFrame frameArg_arg:*todoForm_n))))))
+      listMap_list: (suspensionFrameList suspensionFrameList_suspension:'(todoForm))))))
+  savedTodoWidgets = \( -> listMap
+    listMap_f: \(savedTodos_mapTodo ->
+      htmlText htmlText_text:(frameArg frameArg_frame:savedTodos_mapTodo frameArg_arg:*todoRecord_text))
+    listMap_list: savedTodos)
+  unsavedTodoForm = \( ->
+    todoForm todoForm_n: (listLength listLength_list:savedTodoWidgets))
+  main = \( -> [ unsavedTodoForm, savedTodoWidgets])
+  preTodo = { preTodo_todoInputId preTodo_instant }
+  clicks = \(clicks_frame clicks_todoFormId -> listConcat listConcat_lists:(listMap
+    listMap_f:\(clicks_event -> 
+      (frameArg frameArg_frame:clicks_event frameArg_arg:*event_details)
+        htmlEventDetails_click: \(unused_4 -> [preTodo
+          preTodo_instant:(frameArg frameArg_frame:clicks_event frameArg_arg:*event_instant)
+          preTodo_todoInputId:clicks_todoFormId
+        ])
+    )
+    listMap_list:(htmlElementEvents htmlElementEvents_element:(frameResult frameResult_frame:clicks_frame))))
   |]
 
 --
