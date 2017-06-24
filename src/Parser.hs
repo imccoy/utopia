@@ -84,11 +84,14 @@ pExpParen = between (lexeme (string "("))
 
 pExpLam :: Parser Lam.Exp
 pExpLam = do void $ lexeme (string "\\(")
+             lamS <- optional $ lexeme (string "&")
              names <- many pName
              void $ lexeme (string "->")
              body <- pExp
              void $ lexeme (string ")")
-             pure $ Lam.lam names body
+             pure $ case lamS of
+                      Just _ -> Lam.lamS [names] names body
+                      Nothing -> Lam.lam names body
 
 
 pExpRecord :: Parser Lam.Exp

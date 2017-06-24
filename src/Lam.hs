@@ -29,7 +29,12 @@ data SuspendSpec w e = SuspendSpec (w Name) [(w Name, e)] [SuspendSpec w e]
 deriving instance (Show e, Show (w Name)) => Show (SuspendSpec w e)
 deriving instance (Eq e, Eq (w Name)) => Eq (SuspendSpec w e)
 
-data ExpF w e = LamF [w Name] e
+newtype Susable w = Susable [[w Name]]
+
+deriving instance (Show (w Name)) => Show (Susable w)
+deriving instance (Eq (w Name)) => Eq (Susable w)
+
+data ExpF w e = LamF (Susable w) [w Name] e
               | AppF e [(w Name, e)]
               | RecordF [w Name]
               | VarF Name
@@ -67,7 +72,11 @@ expBinding :: T.Text -> Exp -> Binding Identity
 expBinding name exp = Binding name $ BindingExp exp
 
 lam :: [T.Text] -> Exp -> Exp
-lam args body = Fix $ ExpW $ pure $ LamF (pure <$> args) body
+lam args body = Fix $ ExpW $ pure $ LamF (Susable []) (pure <$> args) body
+
+lamS :: [[Name]] -> [T.Text] -> Exp -> Exp
+lamS susables args body = Fix $ ExpW $ pure $ LamF (Susable $ (fmap (fmap Identity)) susables) (pure <$> args) body
+
 
 app :: Exp -> [(T.Text, Exp)] -> Exp
 app f args = Fix $ ExpW $ pure $ AppF f (traverse . _1 %~ (\name -> pure name) $ args)
@@ -113,7 +122,7 @@ union = Union . fmap pure
 -- But that needs Rank2Types or similar and it's not worth it.
 expChangeW :: (w Name -> w' Name) -> ExpF w e -> ExpF w' e
 expChangeW f (AppF fun args) = AppF fun (map (_1 %~ f) args)
-expChangeW f (LamF names e) = LamF (map f names) e
+expChangeW f (LamF (Susable ss) names e) = LamF (Susable $ fmap (fmap f) ss) (map f names) e
 expChangeW f (RecordF names) = RecordF (map f names)
 expChangeW f (SuspendF spec) = SuspendF $ go spec
   where go (SuspendSpec name args parents) = SuspendSpec (f name) (map (_1 %~ f) args) (go <$> parents)
@@ -124,7 +133,7 @@ expChangeW _ (LitF l) = LitF l
 
 expChangeWM :: (Monad m) => (w Name -> m (w' Name)) -> ExpF w e -> m (ExpF w' e)
 expChangeWM f (AppF fun args) = AppF fun <$> mapM (_1 %%~ f) args
-expChangeWM f (LamF names e) = LamF <$> mapM f names <*> pure e
+expChangeWM f (LamF (Susable ss) names e) = LamF <$> (Susable <$> mapM (mapM f) ss) <*> mapM f names <*> pure e
 expChangeWM f (RecordF names) = RecordF <$> mapM f names
 expChangeWM f (SuspendF spec) = SuspendF <$> go spec
   where go (SuspendSpec name args parents) = SuspendSpec <$> f name <*> mapM (_1 %%~ f) args <*> mapM go parents
@@ -234,7 +243,7 @@ argNamesFromExps builtinsArgsIds typeishsArgsIds exps = combineAll $ (Right <$> 
     argNamesFromExp :: (Ord i) => ExpWithId i -> Either (ArgNameDuplicates i) (Map Name i)
     argNamesFromExp = cata $ \(ExpW (Id.WithId _ (Identity v))) ->
        case v of
-         LamF args e -> combineAll $ e:[Right $ Map.singleton name id | (Id.WithId id (Identity name)) <- args]
+         LamF _ args e -> combineAll $ e:[Right $ Map.singleton name id | (Id.WithId id (Identity name)) <- args]
          RecordF args -> combineAll $ [Right $ Map.singleton name id | (Id.WithId id (Identity name)) <- args]
          _ -> combineAll v
 
@@ -289,10 +298,13 @@ resolveExpVars globalNames expr = go Map.empty expr
   where
     go env (Fix (ExpW (Id.WithId i (Identity e)))) = go' env i e
     go' env _ (AppF e args) = concatExpVars $ (go env e):[lookupArg env arg | arg <- args]
-    go' env _ (LamF names e) = go (addNamesToEnv names env) e
+    go' env _ (LamF (Susable susable) lamNames e) = Map.union <$> lamBodyResolved <*> susableResolved
       where 
-        addNamesToEnv :: [Id.WithId i Identity T.Text] -> Map Name i -> Map Name i
-        addNamesToEnv lamNames = Map.union (Map.fromList [(lamName, id) | (Id.WithId id (Identity lamName)) <- lamNames])
+        lamBodyResolved = go (Map.union namesEnv env) e
+        namesEnv :: Map Name i
+        namesEnv = Map.fromList [(lamName, id) | (Id.WithId id (Identity lamName)) <- lamNames]
+        susableResolved :: Either (UndefinedNames i) (Resolved i)
+        susableResolved = concatExpVars . fmap (concatExpVars . fmap (\(Id.WithId argId (Identity argName)) -> lookupArgName argId argName)) $ susable
     go' _ _ (RecordF _) = Right $ Map.empty -- a RecordF is like a degenerate case of a lam that just has no body and returns its arguments
 
     go' _ i (LamArgIdF name) = lookupArgName i name
@@ -313,7 +325,7 @@ resolveExpVars globalNames expr = go Map.empty expr
     lookupArg env ((Id.WithId id (Identity (argName))), exp) = concatExpVars [ lookupArgName id argName 
                                                                              , go env exp
                                                                              ]
-    lookupArgName :: i -> Name -> Either (MonoidMap Name (Set i)) (Map i i)
+    lookupArgName :: i -> Name -> Either (UndefinedNames i) (Map i i)
     lookupArgName id argName = case Map.lookup argName (globalNamesArgs globalNames) of
                                  Just targetId -> Right $ Map.singleton id targetId
                                  Nothing -> Left $ MonoidMap $ Map.singleton argName (Set.singleton id)
@@ -324,7 +336,7 @@ bindingsWithIdText = T.unlines . map bindingWithIdText
         bindingText (BindingExp exp) = expText exp
         bindingText (BindingTypeish typeish) = typeishText typeish
         expText (Fix (ExpW (Id.WithId id (Identity expBody)))) = lamTopCon expBody <> "@" <> id <> " " <> expBodyText expBody
-        expBodyText (LamF names body) = namesText names <> "\n" <> indent (expText body)
+        expBodyText (LamF _ names body) = namesText names <> "\n" <> indent (expText body)
         expBodyText (AppF fn args) = "(\n" <> indent (expText fn) <> "\n" <> ")\n" <>
                                      argsText args <> "\n"
         expBodyText (RecordF names) = namesText names
@@ -343,7 +355,7 @@ bindingsWithIdText = T.unlines . map bindingWithIdText
         indent = T.unlines . map ("  " <>) . T.lines
 
 lamTopCon :: ExpF w e -> T.Text
-lamTopCon (Lam.LamF _ _) = "LamF"
+lamTopCon (Lam.LamF _ _ _) = "LamF"
 lamTopCon (Lam.AppF _ _) = "AppF"
 lamTopCon (Lam.VarF _) = "VarF"
 lamTopCon (Lam.SuspendF _) = "SuspendF"
@@ -366,20 +378,20 @@ bindingDiffTrees bindings = do
 
 expDiffTree :: ExpWithId T.Text -> DiffTree
 expDiffTree = cata $ \(ExpW (Id.WithId i (Identity v))) -> case v of
-  AppF f args        -> DiffTree i "App" Nothing $
-                                         f:[DiffTree argId
-                                                     "AppArg"
-                                                     (Just arg)
-                                                     [e]
-                                           | (Id.WithId argId (Identity arg), e) <- args
-                                           ]
-  LamF args body      -> DiffTree i "Lam" Nothing $
-                                          [DiffTree argId
-                                                    "LamArg"
-                                                    (Just arg) 
-                                                    []
-                                          | (Id.WithId argId (Identity arg)) <- args
-                                          ] ++ [body]
+  AppF f args            -> DiffTree i "App" Nothing $
+                                             f:[DiffTree argId
+                                                         "AppArg"
+                                                         (Just arg)
+                                                         [e]
+                                               | (Id.WithId argId (Identity arg), e) <- args
+                                               ]
+  LamF _ args body       -> DiffTree i "Lam" Nothing $
+                                             [DiffTree argId
+                                                       "LamArg"
+                                                       (Just arg) 
+                                                       []
+                                             | (Id.WithId argId (Identity arg)) <- args
+                                             ] ++ [body]
   RecordF fields         -> DiffTree i "Record" Nothing
                                                 [DiffTree fieldId
                                                           "RecordField"

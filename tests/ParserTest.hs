@@ -18,25 +18,25 @@ newtype TestExp = TestExp Lam.Exp
 
 instance Eq TestExp where
   TestExp (Fix (Lam.ExpW (Identity a))) == TestExp (Fix (Lam.ExpW (Identity b))) = go a b
-    where Lam.LamF args1 body1 `go` Lam.LamF args2 body2 = args1 == args2 && (TestExp body1) == (TestExp body2)
-          Lam.AppF fun1 args1  `go` Lam.AppF fun2 args2  = (TestExp fun1) == (TestExp fun2) && testExpArgs args1 == testExpArgs args2
-          Lam.RecordF args1    `go` Lam.RecordF args2    = args1 == args2
-          Lam.VarF name1       `go` Lam.VarF name2       = name1 == name2
-          Lam.SuspendF spec1   `go` Lam.SuspendF spec2   = TestSpec spec1 == TestSpec spec2
-          Lam.LamArgIdF name1  `go` Lam.LamArgIdF name2  = name1 == name2
-          Lam.LitF lit1        `go` Lam.LitF lit2        = lit1 == lit2
-          _                    `go` _                    = False
+    where Lam.LamF ss1 args1 body1 `go` Lam.LamF ss2 args2 body2 = args1 == args2 && (TestExp body1) == (TestExp body2) && ss1 == ss2
+          Lam.AppF fun1 args1      `go` Lam.AppF fun2 args2      = (TestExp fun1) == (TestExp fun2) && testExpArgs args1 == testExpArgs args2
+          Lam.RecordF args1        `go` Lam.RecordF args2        = args1 == args2
+          Lam.VarF name1           `go` Lam.VarF name2           = name1 == name2
+          Lam.SuspendF spec1       `go` Lam.SuspendF spec2       = TestSpec spec1 == TestSpec spec2
+          Lam.LamArgIdF name1      `go` Lam.LamArgIdF name2      = name1 == name2
+          Lam.LitF lit1            `go` Lam.LitF lit2            = lit1 == lit2
+          _                        `go` _                        = False
 
 instance Show TestExp where
   showsPrec _ (TestExp (Fix (Lam.ExpW (Identity a)))) = go a
     where
-      go (Lam.LamF args body) = ("(LamF " ++) . showsPrec 0 args . (" " ++) . showsPrec 0 (TestExp body) . (++ ")")
-      go (Lam.AppF fun args)  = ("(AppF " ++) . showsPrec 0 (TestExp fun) . (" " ++) . showsPrec 0 (testExpArgs args) . (++ ")")
-      go (Lam.RecordF args)   = ("(RecordF " ++) . showsPrec 0 args . (++ ")")
-      go (Lam.VarF name)      = ("(VarF " ++) . showsPrec 0 name . (++ ")")
-      go (Lam.SuspendF spec)  = ("(SuspendF " ++) . showsPrec 0 (TestSpec spec) . (++ ")")
-      go (Lam.LamArgIdF name) = ("(LamArgIdF " ++) . showsPrec 0 name . (++ ")")
-      go (Lam.LitF val)       = ("(LitF " ++) . showsPrec 0 val . (++ ")")
+      go (Lam.LamF ss args body) = ("(LamF " ++) . showsPrec 0 ss . (" " ++) . showsPrec 0 args . (" " ++) . showsPrec 0 (TestExp body) . (++ ")")
+      go (Lam.AppF fun args)     = ("(AppF " ++) . showsPrec 0 (TestExp fun) . (" " ++) . showsPrec 0 (testExpArgs args) . (++ ")")
+      go (Lam.RecordF args)      = ("(RecordF " ++) . showsPrec 0 args . (++ ")")
+      go (Lam.VarF name)         = ("(VarF " ++) . showsPrec 0 name . (++ ")")
+      go (Lam.SuspendF spec)     = ("(SuspendF " ++) . showsPrec 0 (TestSpec spec) . (++ ")")
+      go (Lam.LamArgIdF name)    = ("(LamArgIdF " ++) . showsPrec 0 name . (++ ")")
+      go (Lam.LitF val)          = ("(LitF " ++) . showsPrec 0 val . (++ ")")
 
 newtype TestSpec = TestSpec (Lam.SuspendSpec Identity Lam.Exp)
 

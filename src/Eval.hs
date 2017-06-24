@@ -2,6 +2,7 @@
 module Eval where
 
 import Prelude hiding (id, exp)
+import qualified Prelude
 import Control.Lens hiding (reuses)
 import Data.Either (partitionEithers)
 import Data.Map (Map)
@@ -16,6 +17,8 @@ import qualified Lam
 import Lam (BindingWithId, ExpWithId)
 import qualified Primitives
 
+import Debug.Trace
+
 flattenBinding :: BindingWithId i -> Maybe (i, i, Lam.Name, ExpWithId i)
 flattenBinding binding = flip fmap (Lam.bindingExp binding) $ \exp -> 
     (binding ^. Id.id, Lam.expTopId exp, Lam.bindingName binding, exp)
@@ -29,7 +32,7 @@ data Suspension i = Suspension i (Map i (Val i)) [Suspension i]
   deriving (Eq, Ord, Show)
 
 data Val i = Primitive Primitives.Prim
-           | Thunk (Set i) (Env i) (ThunkWithId i)
+           | Thunk [[i]] (Set i) (Env i) (ThunkWithId i)
            | ValSuspension (Suspension i)
            | ValFrame (Frame i)
            | ValList [Val i]
@@ -63,14 +66,14 @@ pprintVal = unlines . go 0
   where
     put indent s = [replicate indent ' ' ++ s]
     go indent (Primitive p) = put indent ("Primitive " ++ show p)
-    go indent (Thunk needed env t) = concat $ [ put indent $ "Thunk " ++ (show $ t ^. Id.id) ++ " " ++ (show $ t ^. Id.value)
-                                              , concat neededArgsRows 
-                                              , put (indent + 2) "has"
-                                              , concat [ put (indent + 4) (show k) ++
-                                                         concat [ go (indent + 6) v ] 
-                                                       | (k, v) <- Map.assocs env
-                                                       ]
-                                              ]
+    go indent (Thunk ss needed env t) = concat $ [ put indent $ "Thunk " ++ (show $ t ^. Id.id) ++ " " ++ show ss ++ " " ++ (show $ t ^. Id.value)
+                                                 , concat neededArgsRows 
+                                                 , put (indent + 2) "has"
+                                                 , concat [ put (indent + 4) (show k) ++
+                                                            concat [ go (indent + 6) v ] 
+                                                          | (k, v) <- Map.assocs env
+                                                          ]
+                                                 ]
       where neededArgsRows
               | Set.null needed  = [ put (indent + 2) "satisfied" ]
               | otherwise        = [ put (indent + 2) "needs"
@@ -125,8 +128,9 @@ dropTrail (Trailing _ v) = v
 withTrail :: (Trail t -> Trail i) -> Trailing t a -> Trailing i a
 withTrail f (Trailing t v) = Trailing (f t) v
 
-expandTrail :: (Ord i, Show i) => (Frame i, Val i) -> Trailing i v -> Trailing i v
-expandTrail frameWithResult = withTrail (Set.insert frameWithResult)
+expandTrail :: (Ord i, Show i) => [[i]] -> (Frame i, Val i) -> Trailing i v -> Trailing i v
+expandTrail [] _               = Prelude.id
+expandTrail _  frameWithResult = withTrail (Set.insert frameWithResult)
 
 withEitherTrail :: (Ord i, Show i) => (v1 -> Either e (Trailing i v2)) -> Either e (Trailing i v1) -> Either e (Trailing i v2)
 withEitherTrail f e = do Trailing t1 v1 <- e
@@ -147,10 +151,10 @@ eval :: (Ord i, Show i)
 eval resolved globalEnv parentFrames env trail (Fix (Lam.ExpW (Id.WithId id (Identity v)))) =
   withEitherTrail (evalVal resolved globalEnv parentFrames env trail) $ case v of
     Lam.RecordF args  -> let argIds = map (^. Id.id) args
-                          in Right $ noTrail $ Thunk (Set.fromList argIds) env (Id.withId id ThunkRecord)
+                          in Right $ noTrail $ Thunk [argIds] (Set.fromList argIds) env (Id.withId id ThunkRecord)
 
-    Lam.LamF args exp -> let argIds = map (^. Id.id) args
-                          in Right $ noTrail $ Thunk (Set.fromList argIds) env (Id.withId id (ThunkExp exp))
+    Lam.LamF susable args exp -> let argIds = map (^. Id.id) args
+                                  in noTrail <$> (Thunk <$> flattenSusable resolved id susable <*> pure (Set.fromList argIds) <*> pure env <*> pure (Id.withId id (ThunkExp exp)))
 
     Lam.AppF exp args -> flip withEitherTrail (evalArgs resolved globalEnv parentFrames env trail args) $ \argValues ->
                               eval resolved globalEnv parentFrames (Map.union argValues env) trail exp
@@ -202,15 +206,15 @@ evalVal :: (Ord i, Show i)
         -> Trail i
         -> Val i
         -> Either [EvalError i] (Trailing i (Val i))
-evalVal resolved globalEnv parentFrames env trail (Thunk thunkArgs thunkEnv thunk)
+evalVal resolved globalEnv parentFrames env trail (Thunk thunkSusable thunkArgs thunkEnv thunk)
   = let argsInEnv = Set.intersection thunkArgs (Map.keysSet env)
        
         argsEnv = Map.filterWithKey (\k _ -> k `Set.member` argsInEnv) env
         thunkEnv' = Map.unions [env, argsEnv, thunkEnv]
 
      in if Set.size argsInEnv == Set.size thunkArgs
-          then evalThunk resolved globalEnv parentFrames trail thunkEnv' argsEnv thunk
-          else Right $ noTrail $ Thunk thunkArgs thunkEnv' thunk
+          then fmap (fmap (reSus thunkSusable)) . evalThunk resolved globalEnv parentFrames trail thunkSusable thunkEnv' argsEnv $ thunk
+          else Right $ noTrail $ Thunk thunkSusable thunkArgs thunkEnv' thunk
        
 evalVal _ _ _ _ _ v = Right $ noTrail v
 
@@ -219,20 +223,28 @@ evalThunk :: (Show i, Ord i)
           -> GlobalEnv i
           -> Frame i
           -> Trail i
+          -> [[i]]
           -> Env i
           -> Env i
           -> Id.WithId i Identity (Thunk i)
           -> Either [EvalError i] (Trailing i (Val i))
-evalThunk resolved globalEnv parentFrame trail thunkEnv argsEnv thunk
+evalThunk resolved globalEnv parentFrame trail susable thunkEnv argsEnv thunk
    = let newFrame = Frame (Just parentFrame) (thunk ^. Id.id) argsEnv
-      in do result <- withEitherTrail (evalVal resolved globalEnv newFrame thunkEnv trail) $ case Id.unId thunk of
+      in do result <- withEitherTrail (evalVal resolved globalEnv newFrame thunkEnv trail . reSus susable) $ case Id.unId thunk of
               ThunkFn fn         -> fmap noTrail $ fn thunkEnv globalEnv
               ThunkTrailFn fn    -> fmap noTrail $ fn trail thunkEnv globalEnv
               ThunkResolvedFn fn -> fn newFrame thunkEnv globalEnv resolved
               ThunkEvalFn fn     -> fn thunkEnv globalEnv (evalVal resolved globalEnv newFrame thunkEnv trail)
               ThunkExp exp       -> eval resolved globalEnv newFrame thunkEnv trail exp
               ThunkRecord        -> pure . pure . ValFrame $ newFrame
-            pure $ expandTrail (newFrame, dropTrail result) result
+            let finalSusable = case result of
+                                 Trailing _ (Thunk s _ _ _) -> s ++ susable
+                                 _ -> susable
+            pure $ expandTrail finalSusable (newFrame, dropTrail result) result
+
+reSus :: [[i]] -> Val i -> Val i
+reSus susable (Thunk susable' a e t) = Thunk (susable' ++ susable) a e t
+reSus _       v = v
 
 lookupVar :: (Ord i, Show i) => i -> Lam.Resolved i -> Map i (Val i) -> GlobalEnv i -> Maybe (Val i)
 lookupVar id resolved env globalEnv = maybe Nothing (lookupVarByResolvedId env globalEnv) $ lookupVarId id resolved
@@ -245,3 +257,7 @@ lookupVarByResolvedId env globalEnv k = case Map.lookup k env of
 
 lookupVarId :: Ord k => k -> Map k a -> Maybe a
 lookupVarId id resolved = Map.lookup id resolved
+
+flattenSusable :: (Show i, Ord i) => Lam.Resolved i -> i -> Lam.Susable (Id.WithId i Identity) -> Either [EvalError i] [[i]]
+flattenSusable resolved errId (Lam.Susable ss) = eitherList ((\s -> eitherList (go <$> s)) <$> ss)
+  where go (Id.WithId id (Identity name)) = maybe (Left [UndefinedVar errId name]) Right (Map.lookup id resolved)

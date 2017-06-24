@@ -56,7 +56,8 @@ eval bindingsWithIds initialEnv = do
   let toplevelEnv = let assocs = flip fmap bindingsWithIds $ \binding -> 
                                    flip fmap (Lam.bindingExp binding) $ \boundExp ->
                                      ( Lam.expTopId boundExp
-                                     , Eval.Thunk Set.empty
+                                     , Eval.Thunk []
+                                                  Set.empty
                                                   Map.empty
                                                   $ Id.WithId (binding ^. Id.id)
                                                               (Identity . Eval.ThunkExp $ boundExp)

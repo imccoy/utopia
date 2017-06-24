@@ -29,9 +29,9 @@ v2 = [ expBinding "add2twice" $ lam ["n"] $
      ]
 
 tracey :: [Binding Identity]
-tracey = [ expBinding "gen1" $ lam ["gen1_n"] $ 
+tracey = [ expBinding "gen1" $ lamS [[]] ["gen1_n"] $ 
                var "gen1_n"
-         , expBinding "gen2" $ lam ["gen2_n"] $
+         , expBinding "gen2" $ lamS [[]] ["gen2_n"] $
                var "gen2_n"
          , expBinding "glue1" $ lam [] $
                listOf [app (var "gen1") [("gen1_n", lit (Number 1))]
@@ -75,9 +75,8 @@ tracey = [ expBinding "gen1" $ lam ["gen1_n"] $
 tracey' :: Text
 tracey' = 
   [NeatInterpolation.text|
-    gen1 = \(gen1_n -> gen1_n)
-    gen2 = \(gen2_n -> gen2_n)
-    gen3 = \(gen3_n -> gen3_n)
+    gen1 = \(&gen1_n -> gen1_n)
+    gen2 = \(&gen2_n -> gen2_n)
     glue1 = [gen1 gen1_n: 1, gen1 gen1_n: 2, gen1 gen1_n: 3]
     glue2a = suspensionFrameList suspensionFrameList_suspension:'(gen1)
     glue2 = listMap listMap_list: glue2a
@@ -127,7 +126,7 @@ findMax = [ expBinding "main" $ lam [] $
 
 
 oneshot :: Either (Text.Megaparsec.ParseError Char Text.Megaparsec.Dec) [Binding Identity]
---oneshot = Right findMax
+--oneshot = Right tracey
 oneshot = Text.Megaparsec.parse (Text.Megaparsec.between (pure ())
                                                          Text.Megaparsec.eof
                                                          Parser.parser)
@@ -278,20 +277,20 @@ maybeResult_nothing = app (var "construct") [("construct_with", lamArgId "maybeR
 maybeResult_just v = app (var "construct") [("construct_with", lamArgId "maybeResult_just"), ("construct_payload", v)]
 
 web :: Either (Text.Megaparsec.ParseError Char Text.Megaparsec.Dec) [Binding Identity]
---web = Right todoWeb
-web = Text.Megaparsec.parse (Text.Megaparsec.between (pure ())
-                                                     Text.Megaparsec.eof
-                                                     Parser.parser)
-                            "inline" (Parser.collapseCode . T.unpack $ todoWeb')
+web = Right todoWeb
+--web = Text.Megaparsec.parse (Text.Megaparsec.between (pure ())
+--                                                     Text.Megaparsec.eof
+--                                                     Parser.parser)
+--                            "inline" (Parser.collapseCode . T.unpack $ todoWeb')
 
 
 todoWeb :: [Binding Identity]
 todoWeb = [ expBinding "todoRecord" $ record ["todoRecord_id", "todoRecord_text"]
-          , expBinding "todoTextBox" $ lam [] $
+          , expBinding "todoTextBox" $ lamS [[]] [] $
               var "htmlTextInput"
-          , expBinding "todoAddButton" $ lam [] $
+          , expBinding "todoAddButton" $ lamS [[]] [] $
               app (var "htmlButton") [("htmlButton_text", lit (Text "Add"))]
-          , expBinding "todoForm" $ lam ["todoForm_n"] $
+          , expBinding "todoForm" $ lamS [["todoForm_n"]] ["todoForm_n"] $
               listOf [ var "todoTextBox"
                      , var "todoAddButton"
                      ]
@@ -353,9 +352,9 @@ todoWeb' :: Text
 todoWeb' = 
   [NeatInterpolation.text|
   todoRecord = { todoRecord_id todoRecord_text }
-  todoTextBox = \( -> htmlTextInput)
-  todoAddButton = \( -> htmlButton htmlButton_text: "Add")
-  todoForm = \(todoForm_n -> [ todoTextBox, todoAddButton ])
+  todoTextBox = \(& -> htmlTextInput)
+  todoAddButton = \(& -> htmlButton htmlButton_text: "Add")
+  todoForm = \(&todoForm_n -> [ todoTextBox, todoAddButton ])
   savedTodos = \( -> listConcat listConcat_lists:(listMap
     listMap_f: \(savedTodos_preTodo -> listMap
       listMap_f: \(savedTodos_textBox -> todoRecord 

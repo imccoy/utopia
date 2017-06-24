@@ -19,9 +19,9 @@ mappingAt (n:ns) = mappingChild n . mappingAt ns
 
 mappingIdsAt :: Mapping -> [Int] -> Maybe (T.Text, Maybe T.Text)
 mappingIdsAt mapping ids = do m <- mapping ^? mappingAt ids
-                              return ( m ^. mappingDst . dstNodeId . (to $ dstNodeIdText)
+                              return ( m ^. mappingDst . dstNodeId . to dstNodeIdText
 
-                                     , m ^? mappingSrc . _Just . srcNodeId . (to $ srcNodeIdText)
+                                     , m ^? mappingSrc . _Just . srcNodeId . to srcNodeIdText
 
                                      )
 

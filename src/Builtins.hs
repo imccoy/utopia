@@ -114,11 +114,11 @@ asText i v = case v of
 
 
 
-type Thunkable = (Set CodeDbId, BuiltinEnv, BuiltinThunk)
+type Thunkable = ([[CodeDbId]], Set CodeDbId, BuiltinEnv, BuiltinThunk)
 getThunkable :: CodeDbId -> T.Text -> BuiltinEnv -> Either [EvalError CodeDbId] Thunkable
 getThunkable i argId env = get i argId env >>= \v ->
   case v of
-    Thunk needed thunkEnv thunkBody -> Right (needed, thunkEnv, thunkBody)
+    Thunk sus needed thunkEnv thunkBody -> Right (sus, needed, thunkEnv, thunkBody)
     _ -> Left [TypeError i v " is not a thunk"]
 
 numberToText :: Builtin
@@ -189,21 +189,21 @@ listMap = Builtin "listMap" ["listMap_f", "listMap_list"] . EvalFnBody $ \i e _ 
   vals <- mapM eval thunks
   pure $ ValList <$> sequenceA vals
 
-callOneArgThunkable :: Ord i => i -> T.Text -> (Set i, Map i (Val i), Eval.ThunkWithId i) -> Val i -> Either [EvalError i] (Val i)
-callOneArgThunkable i label (thunkNeeded, thunkEnv, thunkBody) argValue = case Set.toList thunkNeeded of
-  [argId] -> Right $ Thunk Set.empty (Map.insert argId argValue thunkEnv) thunkBody
-  [] -> Left [TypeError i (Thunk thunkNeeded thunkEnv thunkBody) $ "No arg for " `T.append` label]
-  _ -> Left [TypeError i (Thunk thunkNeeded thunkEnv thunkBody) $ "Too many args for " `T.append` label]
+callOneArgThunkable :: Ord i => i -> T.Text -> ([[i]], Set i, Map i (Val i), Eval.ThunkWithId i) -> Val i -> Either [EvalError i] (Val i)
+callOneArgThunkable i label (thunkSus, thunkNeeded, thunkEnv, thunkBody) argValue = case Set.toList thunkNeeded of
+  [argId] -> Right $ Thunk thunkSus Set.empty (Map.insert argId argValue thunkEnv) thunkBody
+  [] -> Left [TypeError i (Thunk thunkSus thunkNeeded thunkEnv thunkBody) $ "No arg for " `T.append` label]
+  _ -> Left [TypeError i (Thunk thunkSus thunkNeeded thunkEnv thunkBody) $ "Too many args for " `T.append` label]
 
 listFilter :: Builtin
 listFilter = Builtin "listFilter" ["listFilter_f", "listFilter_list"] . EvalFnBody $ \i e _ eval -> do
   list <- getList i "builtin-listFilter-listFilter_list" e
-  thunks <- do (thunkNeeded, thunkEnv, thunkBody) <- getThunkable i "builtin-listFilter-listFilter_f" e
+  thunks <- do (thunkSus, thunkNeeded, thunkEnv, thunkBody) <- getThunkable i "builtin-listFilter-listFilter_f" e
                case Set.toList thunkNeeded of
-                 [argId] -> pure [ Thunk Set.empty (Map.insert argId listElem thunkEnv) thunkBody
+                 [argId] -> pure [ Thunk thunkSus Set.empty (Map.insert argId listElem thunkEnv) thunkBody
                                  | listElem <- list]
-                 [] -> Left [TypeError i (Thunk thunkNeeded thunkEnv thunkBody) "No arg for listFilter_f"]
-                 _ -> Left [TypeError i (Thunk thunkNeeded thunkEnv thunkBody) "Too many args for listFilter_f"]
+                 [] -> Left [TypeError i (Thunk thunkSus thunkNeeded thunkEnv thunkBody) "No arg for listFilter_f"]
+                 _ -> Left [TypeError i (Thunk thunkSus thunkNeeded thunkEnv thunkBody) "Too many args for listFilter_f"]
   ts <- sequenceA <$> mapM eval thunks
   let matchListVs vs = zipWith (\l v -> if v == Primitive (Primitives.Number 0) then Nothing else Just l) list vs
   let trail_filtered = (\vs -> catMaybes . matchListVs $ vs) <$> ts
@@ -237,8 +237,8 @@ listReduce = Builtin "listReduce" ["listReduce_list", "listReduce_base", "listRe
   foldrM f (noTrail base) (noTrail <$> list)
   
 appThunkable :: CodeDbId -> T.Text -> Thunkable -> [(CodeDbId, BuiltinVal)] -> Either [EvalError CodeDbId] BuiltinVal
-appThunkable i n (thunkNeeded, thunkEnv, thunkBody) args | thunkNeeded == (Set.fromList . fmap fst $ args) = Right $ Thunk Set.empty (Map.union (Map.fromList args) thunkEnv) thunkBody
-                                                         | otherwise                                       = Left [TypeError i (Thunk thunkNeeded thunkEnv thunkBody) $ "Wrong args " `T.append` (T.pack . show . fmap fst $ args) `T.append` " for " `T.append` n]
+appThunkable i n (thunkSus, thunkNeeded, thunkEnv, thunkBody) args | thunkNeeded == (Set.fromList . fmap fst $ args) = Right $ Thunk thunkSus Set.empty (Map.union (Map.fromList args) thunkEnv) thunkBody
+                                                                   | otherwise                                       = Left [TypeError i (Thunk thunkSus thunkNeeded thunkEnv thunkBody) $ "Wrong args " `T.append` (T.pack . show . fmap fst $ args) `T.append` " for " `T.append` n]
 
 
 frameArg :: Builtin
@@ -342,7 +342,7 @@ construct = Builtin "construct" ["construct_with", "construct_payload"] $ FnBody
 
 
 unionVal :: BuiltinEnv -> CodeDbId -> BuiltinVal -> BuiltinVal
-unionVal env constructorId payload = Thunk (Set.fromList [constructorId]) env $ Id.WithId dubiousId $ Identity $ ThunkFn $ \e _ -> do
+unionVal env constructorId payload = Thunk [] (Set.fromList [constructorId]) env $ Id.WithId dubiousId $ Identity $ ThunkFn $ \e _ -> do
     caseThunkable <- getThunkable dubiousId (codeDbIdText constructorId) e
     callOneArgThunkable dubiousId  "construct" caseThunkable payload
   where dubiousId = CodeDbId "builtin-construct-unionVal"
@@ -409,7 +409,7 @@ allArgIds = Map.fromList $ foldMap builtinArgsIds builtins ++ foldMap builtinUni
 builtinsEnv :: Env CodeDbId
 builtinsEnv = Map.fromList 
         [ (CodeDbId $ builtinId builtin
-          , Thunk (builtinArgsIdsSet builtin) Map.empty . Id.withId (CodeDbId $ builtinId builtin) $ case builtin ^. body of
+          , Thunk [] (builtinArgsIdsSet builtin) Map.empty . Id.withId (CodeDbId $ builtinId builtin) $ case builtin ^. body of
                                                             FnBody fn -> ThunkFn $ \env globalEnv -> do fn (CodeDbId $ builtinId builtin) env globalEnv
                                                             ResolvedFnBody fn -> ThunkResolvedFn $ \magic env globalEnv resolved -> do fn magic (CodeDbId $ builtinId builtin) env globalEnv resolved
                                                             EvalFnBody fn -> ThunkEvalFn $ \env globalEnv eval -> fn (CodeDbId $ builtinId builtin) env globalEnv eval

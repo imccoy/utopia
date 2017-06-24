@@ -14,7 +14,7 @@ cabal-version:       >=1.10
 
 library
   hs-source-dirs:      src
-  exposed-modules:     Builtins, Code, CodeDb, CodeDbIdGen, CodeTree, Data.Functor.Foldable.Extended, Diff, DiffTree, Eval, Id, Lam, Parser, Primitives, Run
+  exposed-modules:     Builtins, Code, CodeDb, CodeDbIdGen, CodeTree, Data.Functor.Foldable.Extended, Diff, DiffTree, Eval, Id, Lam, Parser, Primitives, Run, Types
   other-modules:       MonoidMap
   default-extensions:  DeriveFunctor,
                        DeriveTraversable,
