@@ -51,7 +51,7 @@ pBinding = do name <- pName
               pure $ Lam.Binding name bindingContents
 
 pBindingContents :: Parser (Lam.BindingContents Identity)
-pBindingContents = (Lam.BindingTypeish <$> unionContents)
+pBindingContents = (Lam.BindingTypeish <$> (unionContents <|> recordContents))
                        <|> (Lam.BindingExp <$> pExp)
 
 unionContents :: Parser (Lam.Typeish Identity)
@@ -59,8 +59,13 @@ unionContents = Lam.Union <$> between (lexeme (string "Union {"))
                                       (lexeme (string "}"))
                                       (many (Identity <$> pName))
 
+recordContents :: Parser (Lam.Typeish Identity)
+recordContents = Lam.Record <$> between (lexeme (string "Record {"))
+                                        (lexeme (string "}"))
+                                        (many (Identity <$> pName))
+
 pNonAppExp :: Parser Lam.Exp
-pNonAppExp = pExpLit <|> pExpVar <|> pExpLam <|> pExpParen <|>  pExpRecord <|> pExpSuspend <|> pExpLamArgId <|> pExpList
+pNonAppExp = pExpLit <|> pExpVar <|> pExpLam <|> pExpParen <|>  pExpSuspend <|> pExpLamArgId <|> pExpList
 
 buildAppOrExp :: Lam.Exp -> [(T.Text, Lam.Exp)] -> Lam.Exp
 buildAppOrExp base [] = base
@@ -92,12 +97,6 @@ pExpLam = do void $ lexeme (string "\\(")
              pure $ case lamS of
                       Just _ -> Lam.lamS [names] names body
                       Nothing -> Lam.lam names body
-
-
-pExpRecord :: Parser Lam.Exp
-pExpRecord = Lam.record <$> between (lexeme (string "{"))
-                                    (lexeme (string "}"))
-                                    (some pName)
 
 pExpVar :: Parser Lam.Exp
 pExpVar = Lam.var <$> pName

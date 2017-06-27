@@ -17,8 +17,6 @@ import qualified Lam
 import Lam (BindingWithId, ExpWithId)
 import qualified Primitives
 
-import Debug.Trace
-
 flattenBinding :: BindingWithId i -> Maybe (i, i, Lam.Name, ExpWithId i)
 flattenBinding binding = flip fmap (Lam.bindingExp binding) $ \exp -> 
     (binding ^. Id.id, Lam.expTopId exp, Lam.bindingName binding, exp)
@@ -150,9 +148,6 @@ eval :: (Ord i, Show i)
   -> Either [EvalError i] (Trailing i (Val i))
 eval resolved globalEnv parentFrames env trail (Fix (Lam.ExpW (Id.WithId id (Identity v)))) =
   withEitherTrail (evalVal resolved globalEnv parentFrames env trail) $ case v of
-    Lam.RecordF args  -> let argIds = map (^. Id.id) args
-                          in Right $ noTrail $ Thunk [argIds] (Set.fromList argIds) env (Id.withId id ThunkRecord)
-
     Lam.LamF susable args exp -> let argIds = map (^. Id.id) args
                                   in noTrail <$> (Thunk <$> flattenSusable resolved id susable <*> pure (Set.fromList argIds) <*> pure env <*> pure (Id.withId id (ThunkExp exp)))
 

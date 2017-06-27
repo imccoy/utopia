@@ -59,19 +59,6 @@ tracey = [ expBinding "gen1" $ lamS [[]] ["gen1_n"] $
                       ]
          ]
 
---tracey' :: Text
---tracey' = 
---  [NeatInterpolation.text|
---    gen1 = \gen1_n -> gen1_n
---    gen2 = \gen2_n -> gen2_n
---    glue1 = \ -> [gen1 gen1_n: 1, gen1 gen1_n: 2, gen1 gen1_n: 3]
---    glue2a = \ -> suspensionFrameList suspensionFrameList_suspension:'(gen1)
---    glue2 = \ -> listMap listMap_list: glue2a
---                         listMap_f: \glue2_elem -> gen2 gen2_n:(frameArg frameArg_frame:glue2_elem
---                                                                         frameArg_arg:*gen1_n)
---    glue3 = suspensionFrameList suspensionFrameList_suspension:'(gen2)
---    main = [gen1, gen2, gen3]
---  |]
 tracey' :: Text
 tracey' = 
   [NeatInterpolation.text|
@@ -285,7 +272,7 @@ web = Right todoWeb
 
 
 todoWeb :: [Binding Identity]
-todoWeb = [ expBinding "todoRecord" $ record ["todoRecord_id", "todoRecord_text"]
+todoWeb = [ typeishBinding "todoRecord" $ record ["todoRecord_id", "todoRecord_text"]
           , expBinding "todoTextBox" $ lamS [[]] [] $
               var "htmlTextInput"
           , expBinding "todoAddButton" $ lamS [[]] [] $
@@ -331,7 +318,7 @@ todoWeb = [ expBinding "todoRecord" $ record ["todoRecord_id", "todoRecord_text"
               listOf [ var "unsavedTodoForm"
                      , var "savedTodoWidgets"
                      ]
-          , expBinding "preTodo" $ record ["preTodo_todoInputId", "preTodo_instant"]
+          , typeishBinding "preTodo" $ record ["preTodo_todoInputId", "preTodo_instant"]
           , expBinding "clicks" $ lam ["clicks_frame", "clicks_todoFormId"] $
               listConcat $ listMap (lam ["clicks_event"] $
                                        app (frameArgLit (var "clicks_event") "event_details")
@@ -351,7 +338,7 @@ todoWeb = [ expBinding "todoRecord" $ record ["todoRecord_id", "todoRecord_text"
 todoWeb' :: Text
 todoWeb' = 
   [NeatInterpolation.text|
-  todoRecord = { todoRecord_id todoRecord_text }
+  todoRecord = Record { todoRecord_id todoRecord_text }
   todoTextBox = \(& -> htmlTextInput)
   todoAddButton = \(& -> htmlButton htmlButton_text: "Add")
   todoForm = \(&todoForm_n -> [ todoTextBox, todoAddButton ])
@@ -379,7 +366,7 @@ todoWeb' =
   unsavedTodoForm = \( ->
     todoForm todoForm_n: (listLength listLength_list:savedTodoWidgets))
   main = \( -> [ unsavedTodoForm, savedTodoWidgets])
-  preTodo = { preTodo_todoInputId preTodo_instant }
+  preTodo = Record { preTodo_todoInputId preTodo_instant }
   clicks = \(clicks_frame clicks_todoFormId -> listConcat listConcat_lists:(listMap
     listMap_f:\(clicks_event -> 
       (frameArg frameArg_frame:clicks_event frameArg_arg:*event_details)

@@ -112,7 +112,7 @@ maybeToEither e = maybe (left e) right
 bindingTys :: Id.WithId t Identity (Lam.Binding (Id.WithId t1 Identity)) -> Map k a
 bindingTys (Id.WithId _ (Identity (Lam.Binding _ b))) = case b of
   (Lam.BindingTypeish (Lam.Union _)) -> Map.empty
-  (Lam.BindingExp (Fix (Lam.ExpW (Id.WithId _ (Identity (Lam.RecordF _)))))) -> Map.empty
+  (Lam.BindingTypeish (Lam.Record _)) -> Map.empty
   _ -> Map.empty
 
 --types :: (Ord i) => Lam.Resolved i -> Eval.GlobalEnv i -> Annotations i -> Lam.BindingWithId i -> Either [TypeError i] (Typing i)

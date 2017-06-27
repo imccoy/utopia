@@ -6,7 +6,6 @@ import Control.Lens hiding (children, mapping)
 import qualified Data.List as List
 import Data.Map (Map)
 import qualified Data.Map as Map
-import Data.Maybe (catMaybes)
 import qualified Data.Set as Set
 import Data.Text (Text)
 
@@ -44,6 +43,13 @@ evalWithTrail :: Lam.Resolved CodeDbId
 evalWithTrail resolved toplevelEnv initialEnv mainExp trail =
   (_Left %~ map RuntimeError) $ Eval.eval resolved (Eval.GlobalEnv toplevelEnv) (Eval.Frame Nothing (CodeDbId "TOPFRAME") Map.empty) initialEnv trail mainExp
 
+bindingContentsEnvItems :: (Ord i) => Lam.BindingWithId i -> [(i, Eval.Val i)]
+bindingContentsEnvItems (Id.WithId i (Identity (Lam.Binding _ contents))) = go contents
+  where go (Lam.BindingExp boundExp) = [(Lam.expTopId boundExp, Eval.Thunk [] Set.empty Map.empty (Id.WithId (Lam.expTopId boundExp) . Identity . Eval.ThunkExp $ boundExp))]
+        go (Lam.BindingTypeish (Lam.Record fields)) = [(i, Eval.Thunk [fieldIds] (Set.fromList fieldIds) Map.empty (Id.WithId i . Identity $ Eval.ThunkRecord))]
+          where fieldIds = (^. Id.id) <$> fields
+        go (Lam.BindingTypeish (Lam.Union _)) = []
+
 eval :: [Lam.BindingWithId CodeDbId]
      -> Map CodeDbId (Eval.Val CodeDbId)
      -> Either [Error] (Eval.Val CodeDbId)
@@ -53,17 +59,8 @@ eval bindingsWithIds initialEnv = do
   let maybeMainExp = Lam.bindingExp =<< List.find ((== "main") . Lam.bindingName) bindingsWithIds
   mainExp <- maybe (Left [RuntimeError $ Eval.UndefinedVar (CodeDbId "toplevel") "main"]) Right maybeMainExp
 
-  let toplevelEnv = let assocs = flip fmap bindingsWithIds $ \binding -> 
-                                   flip fmap (Lam.bindingExp binding) $ \boundExp ->
-                                     ( Lam.expTopId boundExp
-                                     , Eval.Thunk []
-                                                  Set.empty
-                                                  Map.empty
-                                                  $ Id.WithId (binding ^. Id.id)
-                                                              (Identity . Eval.ThunkExp $ boundExp)
-                                     )
-                                                       
-                     in Map.unions [Map.fromList . catMaybes $ assocs, Builtins.builtinsEnv]
+  let toplevelEnv = let bindingsEnv = Map.fromList . concat $ bindingContentsEnvItems <$> bindingsWithIds
+                     in Map.unions [bindingsEnv, Builtins.builtinsEnv]
 
   iterateTrail mempty (evalWithTrail resolved toplevelEnv initialEnv mainExp)
 

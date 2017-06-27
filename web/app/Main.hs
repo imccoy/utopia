@@ -5,7 +5,6 @@ import Prelude hiding (id)
 import qualified Unsafe.Coerce
 
 import           Control.Monad (void)
-import           Data.Either.Combinators (eitherToError, mapLeft)
 import qualified Data.IORef as IORef
 import qualified Data.JSString as JSS
 import qualified Data.Set as Set

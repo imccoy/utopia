@@ -20,7 +20,6 @@ instance Eq TestExp where
   TestExp (Fix (Lam.ExpW (Identity a))) == TestExp (Fix (Lam.ExpW (Identity b))) = go a b
     where Lam.LamF ss1 args1 body1 `go` Lam.LamF ss2 args2 body2 = args1 == args2 && (TestExp body1) == (TestExp body2) && ss1 == ss2
           Lam.AppF fun1 args1      `go` Lam.AppF fun2 args2      = (TestExp fun1) == (TestExp fun2) && testExpArgs args1 == testExpArgs args2
-          Lam.RecordF args1        `go` Lam.RecordF args2        = args1 == args2
           Lam.VarF name1           `go` Lam.VarF name2           = name1 == name2
           Lam.SuspendF spec1       `go` Lam.SuspendF spec2       = TestSpec spec1 == TestSpec spec2
           Lam.LamArgIdF name1      `go` Lam.LamArgIdF name2      = name1 == name2
@@ -32,7 +31,6 @@ instance Show TestExp where
     where
       go (Lam.LamF ss args body) = ("(LamF " ++) . showsPrec 0 ss . (" " ++) . showsPrec 0 args . (" " ++) . showsPrec 0 (TestExp body) . (++ ")")
       go (Lam.AppF fun args)     = ("(AppF " ++) . showsPrec 0 (TestExp fun) . (" " ++) . showsPrec 0 (testExpArgs args) . (++ ")")
-      go (Lam.RecordF args)      = ("(RecordF " ++) . showsPrec 0 args . (++ ")")
       go (Lam.VarF name)         = ("(VarF " ++) . showsPrec 0 name . (++ ")")
       go (Lam.SuspendF spec)     = ("(SuspendF " ++) . showsPrec 0 (TestSpec spec) . (++ ")")
       go (Lam.LamArgIdF name)    = ("(LamArgIdF " ++) . showsPrec 0 name . (++ ")")
@@ -142,9 +140,6 @@ tests = testGroup "Parser"
   , testCase "Exp varArgId" $
       parseExp "*whowhat"
         @?= (mkTestExp $ Lam.lamArgId "whowhat")
-  , testCase "Exp Record" $
-      parseExp "{ a b }"
-        @?= (mkTestExp $ Lam.record ["a", "b"])
   , testCase "Exp binding" $
       parseBinding "a = 1"
         @?= (mkTestExpBinding "a" (Lam.lit $ Lam.Number 1))
@@ -170,7 +165,10 @@ tests = testGroup "Parser"
                                ])
   , testCase "Union binding" $
       parseBindings "z = Union { a b }"
-        @?= (mkTestTypeishBinding "z" (Lam.union ["a", "b"]))
+        @?= (mkTestTypeishBinding "z" $ Lam.union ["a", "b"])
+  , testCase "Record binding" $
+      parseBindings "ab = Record { a b }"
+        @?= (mkTestTypeishBinding "ab" $ Lam.record ["a", "b"])
   , testCase "collapse lines" $
       Parser.collapseLines ["   z", "a", " b", "         c", "d", " e", "f"]
         @?= ["   z", "a b c", "d e", "f"]
